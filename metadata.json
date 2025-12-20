@@ -1,0 +1,5 @@
+{
+  "name": "AstroLocalize",
+  "description": "A specialized translation tool for astrology software resource files. Features: Krutidev/Legacy font decoding, Mantra handling, Gender-specific terminology customization (Spouse -> Husband/Wife), personalized addressing, and Unicode UTF-8 output.",
+  "requestFramePermissions": []
+}
