@@ -36,23 +36,25 @@ export class GeminiService {
       1. **Unicode Enforcement**: The output MUST be in standard UTF-8 Unicode for all languages. 
       2. **Krutidev/Legacy Font Detection**: The input text might contain lines written in 'Krutidev 010', 'Devlys', or similar legacy Hindi font encodings (which appear as garbled ASCII characters like "v©"kf/k ef.k"). 
          - IF you detect this, you MUST first decode it to Hindi Unicode, and THEN translate it to the target language (or keep as Hindi Unicode if target is Hindi).
-      3. **Mantras**: If the text contains Mantras (Sanskrit prayers) either in Sanskrit or English transliteration:
-         - Transliterate them into the script of the target language so they can be pronounced correctly.
-         - Do not translate the meaning of the Mantra itself unless it is part of a descriptive sentence.
+      3. **Mantras & Cultural Terms (Hinglish)**:
+         - The input often contains Hindi/Sanskrit terms written in English script (e.g., "Rashi", "Hanuman Chalisa", "Sundar Kand", "Om Shang Shaneshcharaay Namah").
+         - **Action**: Detect these and Transliterate them accurately into the ${targetLanguage} script.
+         - Example: If target is Hindi, "Hanuman Chalisa" -> "हनुमान चालीसा". "Om" -> "ॐ".
+         - Do not translate the meaning of proper nouns or specific mantras, just correct the script.
       4. **Variables**: Preserve all variables inside angle brackets exactly as is (e.g., <PlanetInfluence>, <House>, <Ratna1>). Do NOT translate or modify them.
       5. **Formatting**: Preserve all leading and trailing whitespace exactly.
       6. **Gender Specificity & Personalization**:
          - The input JSON provides a 'context' field ('Male', 'Female', or 'Neutral').
          - **Personal Tone**: Make the prediction sound personal to the reader (e.g., change "The native will have" to "You will have").
-         - **Specific Terminology (CRITICAL)**:
+         - **Gender Neutral to Specific Conversion (CRITICAL)**:
            - If Context is **Male**: 
-             - Replace "spouse", "partner", "husband/wife" with **"Wife"** (or target language equivalent).
-             - Replace "boy/girl", "opposite sex" with **"Girl"** or **"Woman"**.
-             - Use masculine grammar.
+             - "Spouse" -> **"Wife"**.
+             - "Businessperson" -> **"Businessman"**.
+             - "Opposite sex" -> **"Girl/Woman"**.
            - If Context is **Female**: 
-             - Replace "spouse", "partner", "husband/wife" with **"Husband"** (or target language equivalent).
-             - Replace "boy/girl", "opposite sex" with **"Boy"** or **"Man"**.
-             - Use feminine grammar.
+             - "Spouse" -> **"Husband"**.
+             - "Businessperson" -> **"Businesswoman"**.
+             - "Opposite sex" -> **"Boy/Man"**.
       7. Return ONLY a JSON array of strings corresponding to the results, in the exact order of input.
     `;
 
