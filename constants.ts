@@ -3,6 +3,7 @@ import { TargetLanguage } from './types';
 export const LANGUAGES = [
   { value: TargetLanguage.Hindi, label: 'Hindi (हिंदी)' },
   { value: TargetLanguage.English, label: 'English' },
+  { value: TargetLanguage.Spanish, label: 'Spanish (Español)' },
   { value: TargetLanguage.Bengali, label: 'Bengali (বাংলা)' },
   { value: TargetLanguage.Telugu, label: 'Telugu (తెలుగు)' },
   { value: TargetLanguage.Marathi, label: 'Marathi (मराठी)' },

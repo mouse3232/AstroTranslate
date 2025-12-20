@@ -16,6 +16,7 @@ export enum TargetLanguage {
   Malayalam = 'Malayalam',
   Punjabi = 'Punjabi',
   Nepali = 'Nepali',
+  Spanish = 'Spanish',
 }
 
 export type ProcessingMode = 'translate' | 'rewrite';
