@@ -128,11 +128,12 @@ function App() {
   };
 
   const generateFileName = (originalName: string, lang: string) => {
-    // Input: MyFile.txt -> Output: MyFile_(TRANSLATED)(Hindi)(Standard).txt
+    // Input: MyFile.txt -> Output: MyFile_translated_hindi_standard.txt
     const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
-    const modeStr = dualSexMode ? 'Dual_Sex' : 'Standard';
-    const langLabel = LANGUAGES.find(l => l.value === lang)?.label.split(' ')[0] || lang;
-    return `${nameWithoutExt}_(TRANSLATED)(${langLabel})(${modeStr}).txt`;
+    const modeStr = dualSexMode ? 'dual_sex' : 'standard';
+    const langLabel = LANGUAGES.find(l => l.value === lang)?.label.split(' ')[0].toLowerCase() || lang.toLowerCase();
+    
+    return `${nameWithoutExt}_translated_${langLabel}_${modeStr}.txt`;
   };
 
   const handleProcess = async () => {
