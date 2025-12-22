@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Download, Languages, Split, Sparkles, Wand2, XCircle, CheckCircle2, Files, RefreshCw, Type as TypeIcon, Search, AlertTriangle, ArrowRight, Check, Scroll, BookOpen } from 'lucide-react';
+import { Upload, Download, Languages, Split, Sparkles, Wand2, XCircle, CheckCircle2, Files, RefreshCw, Type as TypeIcon, Search, AlertTriangle, ArrowRight, Check, Scroll, BookOpen, Filter, Settings2 } from 'lucide-react';
 import { LANGUAGES } from './constants';
 import { TargetLanguage, ProcessingMode, ProcessingItem, BatchResponse } from './types';
 import { GeminiService } from './services/geminiService';
@@ -52,6 +52,7 @@ function App() {
   const [autoDownload, setAutoDownload] = useState(true);
   const [shlokaMode, setShlokaMode] = useState(false);
   const [sanskritMode, setSanskritMode] = useState(false);
+  const [yogaMode, setYogaMode] = useState(false);
   const [status, setStatus] = useState<'idle' | 'processing' | 'done' | 'stopped' | 'error'>('idle');
   
   // Modals
@@ -154,6 +155,15 @@ function App() {
           }
           const baseTargetBlocks: TargetBlock[] = [];
           blocks.forEach(block => {
+            // Yoga Mode Filtering
+            if (yogaMode) {
+              const match = block.header.match(/PopularityFlag=(\d+)/);
+              // Only include blocks where PopularityFlag is explicitly 1
+              if (!match || match[1] !== '1') {
+                return; 
+              }
+            }
+
             if (dualSexMode) {
               baseTargetBlocks.push({ header: updateHeaderSex(block.header, 0), lines: [...block.contentLines], gender: 'Male' });
               baseTargetBlocks.push({ header: updateHeaderSex(block.header, 1), lines: [...block.contentLines], gender: 'Female' });
@@ -332,111 +342,187 @@ function App() {
       </header>
 
       {/* --- Toolbar --- */}
-      <div className="bg-gray-900 border-b border-gray-800 p-3 flex items-center justify-between shrink-0 gap-4 overflow-x-auto custom-scrollbar">
-         <div className="flex items-center gap-4">
+      <div className="bg-gray-900 border-b border-gray-800 p-4 shrink-0 flex flex-col gap-4 shadow-xl z-30">
+         
+         {/* Top Row: Primary Controls */}
+         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
             
-            {/* Mode Tabs */}
-            <div className="flex bg-black rounded-lg p-1 border border-gray-700 shadow-sm shrink-0">
-                {[
-                    { id: 'translate', label: 'Translate', icon: Languages, color: 'bg-indigo-600' },
-                    { id: 'rewrite', label: 'Rewrite', icon: Wand2, color: 'bg-teal-600' },
-                    { id: 'convert_encoding', label: 'Fix KrutiDev', icon: TypeIcon, color: 'bg-orange-600' }
-                ].map(m => (
-                    <button
-                        key={m.id}
-                        onClick={() => setMode(m.id as ProcessingMode)}
-                        className={`px-4 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-all ${
-                            mode === m.id ? `${m.color} text-white shadow-md` : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
-                        }`}
+            <div className="flex flex-wrap items-center gap-4 w-full lg:w-auto">
+                {/* Mode Tabs */}
+                <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider hidden sm:block">Action</span>
+                    <div className="flex bg-black rounded-lg p-1 border border-gray-700 shadow-sm">
+                        {[
+                            { id: 'translate', label: 'Translate', icon: Languages, color: 'bg-indigo-600' },
+                            { id: 'rewrite', label: 'Rewrite', icon: Wand2, color: 'bg-teal-600' },
+                            { id: 'convert_encoding', label: 'Fix KrutiDev', icon: TypeIcon, color: 'bg-orange-600' }
+                        ].map(m => (
+                            <button
+                                key={m.id}
+                                onClick={() => setMode(m.id as ProcessingMode)}
+                                className={`px-3 sm:px-4 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-all ${
+                                    mode === m.id ? `${m.color} text-white shadow-md` : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                                }`}
+                            >
+                                <m.icon className="w-3.5 h-3.5" /> 
+                                <span className={mode === m.id ? 'block' : 'hidden sm:block'}>{m.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="h-8 w-px bg-gray-800 hidden lg:block"></div>
+
+                {/* Language Trigger */}
+                <div className="flex items-center gap-2 flex-1 sm:flex-none">
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider hidden sm:block">Target</span>
+                    <button 
+                        onClick={() => setIsLangModalOpen(true)}
+                        className="flex-1 sm:flex-none flex items-center justify-between sm:justify-start gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-md text-xs border border-gray-600 text-gray-300 transition-colors shadow-sm min-w-[140px]"
                     >
-                        <m.icon className="w-3.5 h-3.5" /> {m.label}
+                        <div className="flex items-center gap-2">
+                            <Languages className="w-3.5 h-3.5 text-indigo-400" />
+                            <span>{selectedLangs.length} Language{selectedLangs.length !== 1 ? 's' : ''}</span>
+                        </div>
+                        <CheckCircle2 className="w-3 h-3 text-gray-500" />
                     </button>
-                ))}
+                </div>
             </div>
 
-            <div className="h-6 w-px bg-gray-700 shrink-0"></div>
+            {/* Start Button (Desktop Position) */}
+            <div className="hidden lg:block">
+                 {status === 'processing' ? (
+                    <Button 
+                        variant="ghost" 
+                        className="bg-red-900/20 text-red-400 hover:bg-red-900/40 border border-red-900/50 h-10 px-6 text-xs font-semibold tracking-wide" 
+                        onClick={() => {
+                            stopProcessingRef.current = true;
+                            setStatus('stopped'); 
+                        }}
+                    >
+                        <XCircle className="w-4 h-4 mr-2" /> STOP PROCESSING
+                    </Button>
+                 ) : (
+                    <Button 
+                        className={`h-10 px-8 text-xs font-bold tracking-wide shadow-lg transition-transform active:scale-95 flex items-center gap-2 ${
+                            mode === 'convert_encoding' 
+                                ? 'bg-orange-600 hover:bg-orange-500 shadow-orange-900/20 border-orange-500' 
+                                : mode === 'rewrite'
+                                ? 'bg-teal-600 hover:bg-teal-500 shadow-teal-900/20 border-teal-500'
+                                : 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/20 border-indigo-500'
+                        }`} 
+                        onClick={handleProcess} 
+                        disabled={files.length === 0}
+                    >
+                       {mode === 'convert_encoding' ? <RefreshCw className="w-4 h-4"/> : <Sparkles className="w-4 h-4"/>}
+                       {mode === 'convert_encoding' ? 'START CONVERSION' : mode === 'rewrite' ? 'START REWRITE' : 'START TRANSLATION'}
+                    </Button>
+                 )}
+            </div>
+         </div>
 
-            {/* Language Trigger */}
-            <button 
-                onClick={() => setIsLangModalOpen(true)}
-                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-md text-xs border border-gray-600 text-gray-300 transition-colors shrink-0"
-            >
-                <Languages className="w-3.5 h-3.5" />
-                {selectedLangs.length} Language{selectedLangs.length !== 1 ? 's' : ''} Selected
-            </button>
-
-            <div className="h-6 w-px bg-gray-700 shrink-0"></div>
-
-             {/* Dual Sex Toggle */}
-             <div 
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all shrink-0 ${
-                    dualSexMode ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
-                }`}
-                onClick={() => setDualSexMode(!dualSexMode)}
-                title="Generate Male and Female versions for every block"
-             >
-                <Split className="w-3.5 h-3.5" />
-                <span className="text-xs font-medium">Dual Sex Output</span>
+         {/* Bottom Row: Options Toggles */}
+         <div className="flex flex-wrap items-center gap-2 bg-gray-800/30 p-2 rounded-lg border border-gray-800">
+             <div className="flex items-center gap-2 px-2 border-r border-gray-700 mr-1">
+                 <Settings2 className="w-3.5 h-3.5 text-gray-500" />
+                 <span className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Options</span>
              </div>
 
-            {/* Shloka Transliterate Toggle */}
-            <div 
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all shrink-0 ${
-                    shlokaMode && !sanskritMode ? 'bg-purple-900/30 border-purple-500/50 text-purple-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
-                }`}
-                onClick={() => {
-                   setShlokaMode(!shlokaMode);
-                   if (!shlokaMode) setSanskritMode(false); // Disable conflicting mode
-                }}
-                title="Write Shlokas in target language script (e.g. Hinglish)"
-             >
-                <Scroll className="w-3.5 h-3.5" />
-                <span className="text-xs font-medium">Transliterate</span>
+             {/* Toggles Group */}
+             <div className="flex flex-wrap items-center gap-2 flex-1">
+                 {/* Dual Sex Toggle */}
+                 <button 
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium transition-all ${
+                        dualSexMode ? 'bg-indigo-900/40 border-indigo-500/50 text-indigo-200' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'
+                    }`}
+                    onClick={() => setDualSexMode(!dualSexMode)}
+                    title="Generate Male and Female versions for every block"
+                 >
+                    <Split className="w-3.5 h-3.5" />
+                    Dual Sex
+                    {dualSexMode && <Check className="w-3 h-3 ml-1" />}
+                 </button>
+
+                 {/* Shloka Mode */}
+                 <button 
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium transition-all ${
+                        shlokaMode && !sanskritMode ? 'bg-purple-900/40 border-purple-500/50 text-purple-200' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'
+                    }`}
+                    onClick={() => {
+                       setShlokaMode(!shlokaMode);
+                       if (!shlokaMode) setSanskritMode(false);
+                    }}
+                    title="Write Shlokas in target language script (e.g. Hinglish)"
+                 >
+                    <Scroll className="w-3.5 h-3.5" />
+                    Transliterate Shlokas
+                    {shlokaMode && !sanskritMode && <Check className="w-3 h-3 ml-1" />}
+                 </button>
+
+                 {/* Sanskrit Mode */}
+                 <button 
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium transition-all ${
+                        sanskritMode ? 'bg-pink-900/40 border-pink-500/50 text-pink-200' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'
+                    }`}
+                    onClick={() => {
+                        setSanskritMode(!sanskritMode);
+                        if (!sanskritMode) setShlokaMode(false);
+                    }}
+                    title="Always keep Shlokas in Sanskrit Devanagari script"
+                 >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    Preserve Sanskrit
+                    {sanskritMode && <Check className="w-3 h-3 ml-1" />}
+                 </button>
+
+                 {/* Yoga Mode */}
+                 <button 
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium transition-all ${
+                        yogaMode ? 'bg-amber-900/40 border-amber-500/50 text-amber-200' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'
+                    }`}
+                    onClick={() => setYogaMode(!yogaMode)}
+                    title="Only process blocks with PopularityFlag=1"
+                 >
+                    <Filter className="w-3.5 h-3.5" />
+                    Yoga Filter
+                    {yogaMode && <Check className="w-3 h-3 ml-1" />}
+                 </button>
              </div>
 
-            {/* Preserve Sanskrit Toggle */}
-            <div 
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all shrink-0 ${
-                    sanskritMode ? 'bg-pink-900/30 border-pink-500/50 text-pink-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
-                }`}
-                onClick={() => {
-                    setSanskritMode(!sanskritMode);
-                    if (!sanskritMode) setShlokaMode(false); // Disable conflicting mode
-                }}
-                title="Always keep Shlokas in Sanskrit Devanagari script, regardless of target language"
-             >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span className="text-xs font-medium">Sanskrit Dev.</span>
-             </div>
-
-             {/* Auto Download Toggle */}
-             <div 
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all shrink-0 ${
-                    autoDownload ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
-                }`}
-                onClick={() => setAutoDownload(!autoDownload)}
-             >
-                <Download className="w-3.5 h-3.5" />
-                <span className="text-xs font-medium">Auto Download</span>
+             {/* Auto Download */}
+             <div className="flex items-center border-l border-gray-700 pl-3 ml-auto">
+                 <button 
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium transition-all ${
+                        autoDownload ? 'bg-emerald-900/30 border-emerald-500/50 text-emerald-200' : 'bg-transparent border-transparent text-gray-500 hover:text-gray-300'
+                    }`}
+                    onClick={() => setAutoDownload(!autoDownload)}
+                 >
+                    <Download className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Auto Save</span>
+                    {autoDownload && <span className="sm:hidden text-emerald-400">●</span>}
+                 </button>
              </div>
          </div>
 
-         {/* Actions */}
-         <div className="flex items-center gap-2 shrink-0">
+         {/* Mobile Action Button */}
+         <div className="lg:hidden">
              {status === 'processing' ? (
                 <Button 
                     variant="ghost" 
-                    className="bg-red-900/30 text-red-400 hover:bg-red-900/50 border border-red-900/50 h-9 text-xs" 
-                    onClick={() => {
-                        stopProcessingRef.current = true;
-                        setStatus('stopped'); // Immediate UI feedback
-                    }}
+                    className="w-full bg-red-900/20 text-red-400 border border-red-900/50 h-10 text-xs font-bold" 
+                    onClick={() => { stopProcessingRef.current = true; setStatus('stopped'); }}
                 >
-                    <XCircle className="w-3.5 h-3.5 mr-1.5" /> Stop
+                    STOP PROCESSING
                 </Button>
              ) : (
-                <Button className="h-9 text-xs px-6 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/20 border border-indigo-500" onClick={handleProcess} disabled={files.length === 0}>
-                   {mode === 'convert_encoding' ? 'Start Conversion' : mode === 'rewrite' ? 'Start Rewrite' : 'Start Translation'}
+                <Button 
+                    className={`w-full h-10 text-xs font-bold tracking-wide shadow-lg ${
+                         mode === 'convert_encoding' ? 'bg-orange-600' : mode === 'rewrite' ? 'bg-teal-600' : 'bg-indigo-600'
+                    }`} 
+                    onClick={handleProcess} 
+                    disabled={files.length === 0}
+                >
+                    {mode === 'convert_encoding' ? 'START CONVERSION' : mode === 'rewrite' ? 'START REWRITE' : 'START TRANSLATION'}
                 </Button>
              )}
          </div>
