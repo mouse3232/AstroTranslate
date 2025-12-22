@@ -19,7 +19,7 @@ export enum TargetLanguage {
   Spanish = 'Spanish',
 }
 
-export type ProcessingMode = 'translate' | 'rewrite';
+export type ProcessingMode = 'translate' | 'rewrite' | 'convert_encoding';
 
 export interface ParsedBlock {
   raw: string;      // The full raw string of the block including trailing newlines
@@ -38,4 +38,14 @@ export interface ProcessingItem {
   context: 'Male' | 'Female' | 'Neutral';
   blockId: string; // unique id to map back
   lineIndex: number;
+}
+
+export interface BatchResponse {
+  text: string;
+  metadata?: {
+    wasCorrected: boolean;
+    originalDecoded?: string;
+    reason?: string;
+    source?: string;
+  };
 }

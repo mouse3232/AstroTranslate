@@ -1,6 +1,6 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { MODEL_NAME } from '../constants';
-import { ProcessingMode } from '../types';
+import { ProcessingMode, BatchResponse } from '../types';
 
 interface BatchItem {
   text: string;
@@ -17,48 +17,89 @@ export class GeminiService {
   async translateBatch(
     items: BatchItem[],
     targetLanguage: string,
-    mode: ProcessingMode
-  ): Promise<string[]> {
+    mode: ProcessingMode,
+    transliterateShlokas: boolean = false
+  ): Promise<BatchResponse[]> {
     if (items.length === 0) return [];
 
-    const instruction = mode === 'rewrite'
-      ? `You are an expert astrology software editor. 
-         REWRITE and CORRECT the grammatical mistakes in the following text which is in ${targetLanguage} (or English).
-         Do NOT translate if the text is already in the target language.
-         Preserve the astrological meaning perfectly.`
-      : `You are an expert translator for technical astrology software.
-         TRANSLATE the following text into ${targetLanguage}.`;
+    let instruction = '';
+    let tools: any[] = [];
+    
+    // Schema definition for robust output
+    const batchResponseSchema: Schema = {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          text: { type: Type.STRING, description: "The final output text (translated, rewritten, or converted)." },
+          wasCorrected: { type: Type.BOOLEAN, description: "True if the text was significantly corrected for facts/spelling (mostly for convert mode)." },
+          originalDecoded: { type: Type.STRING, description: "For convert mode: the raw decoding before correction." },
+          reason: { type: Type.STRING, description: "Reason for the correction if applicable." },
+          source: { type: Type.STRING, description: "Source URL if verified via Google Search." }
+        },
+        required: ["text"]
+      }
+    };
+
+    if (mode === 'rewrite') {
+      instruction = `You are an expert astrology software editor. 
+         Task: REWRITE and CORRECT grammatical mistakes in the provided text.
+         - The text is likely in ${targetLanguage} or English.
+         - Do NOT translate if it is already in ${targetLanguage}, just refine it.
+         - Preserve the original astrological meaning perfectly.`;
+    } else if (mode === 'convert_encoding') {
+      // Enable Google Search for grounding in this mode
+      tools = [{ googleSearch: {} }];
+      
+      instruction = `You are an expert in decoding legacy Hindi fonts (KrutiDev 010) to Unicode.
+         Task: CONVERT the text from KrutiDev to Unicode Hindi.
+         
+         CRITICAL VERIFICATION PROCESS:
+         1. Decode the garbled ASCII string to Hindi.
+         2. If the text appears to be a Sanskrit Shloka, Mantra, or astrological fact, VERIFY it using the Google Search tool.
+         3. If the decoded text has spelling errors or incorrect words compared to the standard mantra/text found online, CORRECT IT.
+         4. If you apply a correction, set 'wasCorrected' to true, provide the 'reason', and the 'originalDecoded' (the raw conversion before fixing).
+         5. Preserve variables like <Planet> exactly.`;
+    } else {
+      instruction = `You are an expert translator. TRANSLATE to ${targetLanguage}.`;
+    }
+
+    const shlokaInstruction = transliterateShlokas ? `
+    6. SHLOKA/MANTRA HANDLING (STRICT):
+       - IF the input contains a Sanskrit Shloka, Mantra, or Verse:
+         * DO NOT translate its meaning into English or the target language words.
+         * INSTEAD, TRANSLITERATE it phonetically into the Target Language script.
+       - Case 1: Target is English (or similar Latin script):
+         * Write in "Hinglish" (Romanized Sanskrit). 
+         * Example: "Tum Kaha Ja rhe" or "Om Bhur Bhuva Swaha".
+       - Case 2: Target is Hindi (or Indic script):
+         * Write in standard Sanskrit/Hindi Unicode.
+         * Example: "ॐ भूर्भुवः स्वः".
+    ` : '';
 
     const prompt = `
       ${instruction}
 
-      CRITICAL RULES:
-      1. **Unicode Enforcement**: The output MUST be in standard UTF-8 Unicode for all languages. 
-      2. **Krutidev/Legacy Font Detection**: The input text might contain lines written in 'Krutidev 010', 'Devlys', or similar legacy Hindi font encodings (which appear as garbled ASCII characters like "v©"kf/k ef.k"). 
-         - IF you detect this, you MUST first decode it to Hindi Unicode, and THEN translate it to the target language (or keep as Hindi Unicode if target is Hindi).
-      3. **Mantras & Cultural Terms (Hinglish)**:
-         - The input often contains Hindi/Sanskrit terms written in English script (e.g., "Rashi", "Hanuman Chalisa", "Sundar Kand", "Om Shang Shaneshcharaay Namah").
-         - **Action**: Detect these and Transliterate them accurately into the ${targetLanguage} script.
-         - Example: If target is Hindi, "Hanuman Chalisa" -> "हनुमान चालीसा". "Om" -> "ॐ".
-         - Do not translate the meaning of proper nouns or specific mantras, just correct the script.
-      4. **Variables**: Preserve all variables inside angle brackets exactly as is (e.g., <PlanetInfluence>, <House>, <Ratna1>). Do NOT translate or modify them.
-      5. **Formatting**: Preserve all leading and trailing whitespace exactly.
-      6. **Gender Specificity & Personalization**:
-         - The input JSON provides a 'context' field ('Male', 'Female', or 'Neutral').
-         - **Personal Tone**: Make the prediction sound personal to the reader (e.g., change "The native will have" to "You will have").
-         - **Gender Neutral to Specific Conversion (CRITICAL)**:
-           - If Context is **Male**: 
-             - "Spouse" -> **"Wife"**.
-             - "Businessperson" -> **"Businessman"**.
-             - "Opposite sex" -> **"Girl/Woman"**.
-           - If Context is **Female**: 
-             - "Spouse" -> **"Husband"**.
-             - "Businessperson" -> **"Businesswoman"**.
-             - "Opposite sex" -> **"Boy/Man"**.
-      7. Return ONLY a JSON array of strings corresponding to the results, in the exact order of input.
+      GLOBAL RULES:
+      1. Output MUST be standard UTF-8.
+      2. Preserve variables (<Var>) exactly.
+      3. Preserve formatting (whitespace).
+      4. GENDER ADAPTATION (CRITICAL):
+         - Each input item has a "context" field ('Male', 'Female', or 'Neutral').
+         - You MUST adapt the output to match this gender context specifically.
+         - RULES for 'Male' Context:
+           * Replace gender-neutral terms like "Businessperson" with "Businessman".
+           * Replace "Spouse" with "Wife" (unless context implies otherwise).
+           * Use masculine grammar and adjectives (e.g., Hindi: 'जातक', 'करता', 'होगा').
+         - RULES for 'Female' Context:
+           * Replace gender-neutral terms like "Businessperson" with "Businesswoman".
+           * Replace "Spouse" with "Husband" (unless context implies otherwise).
+           * Use feminine grammar and adjectives (e.g., Hindi: 'जातिका', 'करती', 'होगी').
+         - Apply this adaptation logic for ALL languages (English, Hindi, Spanish, etc.).
+      5. Return strictly a JSON Array matching the schema.
+      ${shlokaInstruction}
     `;
 
-    // Map items to a simpler structure for the model to digest
     const promptInput = items.map(item => ({
       text: item.text,
       context: item.context
@@ -77,26 +118,21 @@ export class GeminiService {
           }
         ],
         config: {
+          tools: tools,
           responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.STRING
-            }
-          }
+          responseSchema: batchResponseSchema
         }
       });
 
       const jsonStr = response.text || "[]";
-      let results: string[] = JSON.parse(jsonStr);
+      let results: BatchResponse[] = JSON.parse(jsonStr);
 
       // Sanity check length
       if (results.length !== items.length) {
-        console.warn(`Mismatch in translation count. Sent ${items.length}, got ${results.length}. Padding with originals.`);
-        // Fill missing spots with original text to prevent crash
+        // Pad with errors or originals
         const padded = [...results];
         while (padded.length < items.length) {
-          padded.push(items[padded.length].text);
+          padded.push({ text: items[padded.length].text });
         }
         results = padded;
       }
@@ -105,8 +141,8 @@ export class GeminiService {
 
     } catch (error) {
       console.error("Gemini Processing Error:", error);
-      // Fallback: return original texts
-      return items.map(i => i.text);
+      // Fallback
+      return items.map(i => ({ text: i.text }));
     }
   }
 }

@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Download, Languages, FileText, Split, ArrowRightLeft, Sparkles, Wand2, XCircle, CheckCircle2, Files, RefreshCw } from 'lucide-react';
+import { Upload, Download, Languages, Split, Sparkles, Wand2, XCircle, CheckCircle2, Files, RefreshCw, Type as TypeIcon, Search, AlertTriangle, ArrowRight, Check, Scroll } from 'lucide-react';
 import { LANGUAGES } from './constants';
-import { TargetLanguage, ProcessingMode, ProcessingItem } from './types';
+import { TargetLanguage, ProcessingMode, ProcessingItem, BatchResponse } from './types';
 import { GeminiService } from './services/geminiService';
 import { parseInputFile, identifyTranslatableLines, getGenderFromHeader, updateHeaderSex } from './utils/parser';
 import { Button } from './components/Button';
@@ -16,11 +16,6 @@ As a successful businessperson, you should recite Hanuman Chalisa daily.
 
 #* Planet=0,Case=1
 ##*Text
-Mars is aspecting the 7th house. Your spouse will be supportive.
-Chant Om Shang Shaneshcharaay Namah for peace.
-
-#* Planet=0,House=0,GoodBad=0
-##*Text
 v©"kf/k ef.k  ea=k.kka]  xzg&u{k=  rkfjdk A
 ÒkX;dkys ÒosfRlf)% vÒkX;a fu"Qya Òosr AA`;
 
@@ -30,60 +25,65 @@ interface FileData {
   id: string;
 }
 
+interface PendingReview {
+  fileId: string;
+  lang: string;
+  items: {
+    blockId: string;
+    lineIndex: number;
+    originalDecoded: string;
+    suggestedText: string;
+    reason: string;
+    source: string;
+  }[];
+  finalOutputBuilder: (reviewedItems: Record<string, string>) => void;
+}
+
 function App() {
-  // State for multiple files
   const [files, setFiles] = useState<FileData[]>([
     { name: 'Default_Example.txt', content: DEFAULT_CONTENT, id: 'default' }
   ]);
   const [activeFileId, setActiveFileId] = useState<string>('default');
-
-  // Dictionary to store output per language. Key structure: "fileId_langCode"
   const [outputs, setOutputs] = useState<Record<string, string>>({});
-  const [activeOutputTab, setActiveOutputTab] = useState<string>('');
   
   const [selectedLangs, setSelectedLangs] = useState<string[]>([TargetLanguage.Hindi]);
   const [mode, setMode] = useState<ProcessingMode>('translate');
   const [dualSexMode, setDualSexMode] = useState(false);
+  const [autoDownload, setAutoDownload] = useState(true);
+  const [shlokaMode, setShlokaMode] = useState(false);
   const [status, setStatus] = useState<'idle' | 'processing' | 'done' | 'stopped' | 'error'>('idle');
   
-  // Detailed Progress Stats
+  // Modals
+  const [isLangModalOpen, setIsLangModalOpen] = useState(false);
+  const [reviewData, setReviewData] = useState<PendingReview | null>(null);
+
   const [progress, setProgress] = useState({
-    fileIndex: 0,
-    totalFiles: 0,
-    langIndex: 0,
-    totalLangs: 0,
-    blocksSent: 0,
-    blocksTotal: 0,
-    currentFileName: ''
+    fileIndex: 0, totalFiles: 0, langIndex: 0, totalLangs: 0,
+    blocksSent: 0, blocksTotal: 0, currentFileName: ''
   });
   
   const [errorMsg, setErrorMsg] = useState('');
-
-  // Ref to handle stopping the process
   const stopProcessingRef = useRef(false);
+
+  // --- Handlers ---
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
-
     const newFiles: FileData[] = [];
     let processedCount = 0;
-
     (Array.from(fileList) as File[]).forEach(file => {
       const reader = new FileReader();
       reader.onload = (event) => {
-        const text = event.target?.result as string;
         newFiles.push({
           name: file.name,
-          content: text,
+          content: event.target?.result as string,
           id: Math.random().toString(36).substr(2, 9)
         });
         processedCount++;
-        
         if (processedCount === fileList.length) {
           setFiles(newFiles);
           setActiveFileId(newFiles[0].id);
-          // Reset outputs when new files are loaded
           setOutputs({});
         }
       };
@@ -91,30 +91,14 @@ function App() {
     });
   };
 
-  const updateActiveFileContent = (newContent: string) => {
-    setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, content: newContent } : f));
-  };
-
-  const getActiveFileContent = () => {
-    return files.find(f => f.id === activeFileId)?.content || '';
-  };
-
   const toggleLanguage = (langValue: string) => {
-    setSelectedLangs(prev => {
-      if (prev.includes(langValue)) {
-        if (prev.length === 1) return prev;
-        return prev.filter(l => l !== langValue);
-      }
-      return [...prev, langValue];
-    });
+    setSelectedLangs(prev => 
+      prev.includes(langValue) 
+        ? (prev.length === 1 ? prev : prev.filter(l => l !== langValue)) 
+        : [...prev, langValue]
+    );
   };
 
-  const handleStop = () => {
-    stopProcessingRef.current = true;
-    setStatus('stopped');
-  };
-
-  // Trigger browser download
   const triggerDownload = (fileName: string, content: string) => {
     const blob = new Blob(['\uFEFF' + content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -128,171 +112,161 @@ function App() {
   };
 
   const generateFileName = (originalName: string, lang: string) => {
-    // Input: MyFile.txt -> Output: MyFile_translated_hindi_standard.txt
     const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
     const modeStr = dualSexMode ? 'dual_sex' : 'standard';
     const langLabel = LANGUAGES.find(l => l.value === lang)?.label.split(' ')[0].toLowerCase() || lang.toLowerCase();
-    
-    return `${nameWithoutExt}_translated_${langLabel}_${modeStr}.txt`;
+    let suffix = 'translated';
+    if (mode === 'rewrite') suffix = 'rewritten';
+    if (mode === 'convert_encoding') suffix = 'converted_unicode';
+    return `${nameWithoutExt}_${suffix}_${langLabel}_${modeStr}.txt`;
   };
 
+  // --- Core Processing Logic ---
   const handleProcess = async () => {
     stopProcessingRef.current = false;
     setStatus('processing');
     setOutputs({});
     setErrorMsg('');
+    setReviewData(null);
     
-    // Initial Progress State
     setProgress({
-      fileIndex: 0,
-      totalFiles: files.length,
-      langIndex: 0,
-      totalLangs: selectedLangs.length,
-      blocksSent: 0,
-      blocksTotal: 0,
-      currentFileName: ''
+      fileIndex: 0, totalFiles: files.length, langIndex: 0, totalLangs: selectedLangs.length,
+      blocksSent: 0, blocksTotal: 0, currentFileName: ''
     });
 
     try {
-      // Use API Key from environment variable
       const gemini = new GeminiService(process.env.API_KEY!);
 
-      // --- Loop through Files ---
       for (let fIndex = 0; fIndex < files.length; fIndex++) {
-        if (stopProcessingRef.current) break;
-        
+        if (stopProcessingRef.current) { setStatus('stopped'); return; }
         const currentFile = files[fIndex];
         
-        // --- Loop through Languages ---
         for (let lIndex = 0; lIndex < selectedLangs.length; lIndex++) {
-          if (stopProcessingRef.current) break;
-
+          if (stopProcessingRef.current) { setStatus('stopped'); return; }
           const currentLang = selectedLangs[lIndex];
+          
           const { preamble, blocks } = parseInputFile(currentFile.content);
 
-          // Step 1: Expand blocks based on Dual Sex Mode
+          // Prepare blocks
           interface TargetBlock {
-            header: string;
-            lines: string[]; 
-            gender: 'Male' | 'Female' | 'Neutral';
+            header: string; lines: string[]; gender: 'Male' | 'Female' | 'Neutral';
           }
-
           const baseTargetBlocks: TargetBlock[] = [];
-
           blocks.forEach(block => {
             if (dualSexMode) {
-              baseTargetBlocks.push({
-                header: updateHeaderSex(block.header, 0),
-                lines: [...block.contentLines],
-                gender: 'Male'
-              });
-              baseTargetBlocks.push({
-                header: updateHeaderSex(block.header, 1),
-                lines: [...block.contentLines],
-                gender: 'Female'
-              });
+              baseTargetBlocks.push({ header: updateHeaderSex(block.header, 0), lines: [...block.contentLines], gender: 'Male' });
+              baseTargetBlocks.push({ header: updateHeaderSex(block.header, 1), lines: [...block.contentLines], gender: 'Female' });
             } else {
-              const gender = getGenderFromHeader(block.header);
-              baseTargetBlocks.push({
-                header: block.header,
-                lines: [...block.contentLines],
-                gender
-              });
+              baseTargetBlocks.push({ header: block.header, lines: [...block.contentLines], gender: getGenderFromHeader(block.header) });
             }
           });
 
-          // Step 2: Identify items
+          // Identify items
           const processingItems: ProcessingItem[] = [];
           baseTargetBlocks.forEach((block, blockIdx) => {
             const translatableMap = identifyTranslatableLines(block.lines);
             block.lines.forEach((line, lineIdx) => {
               if (translatableMap[lineIdx]) {
-                processingItems.push({
-                  text: line,
-                  context: block.gender,
-                  blockId: `b${blockIdx}`,
-                  lineIndex: lineIdx
-                });
+                processingItems.push({ text: line, context: block.gender, blockId: `b${blockIdx}`, lineIndex: lineIdx });
               }
             });
           });
 
           const totalItems = processingItems.length;
           const BATCH_SIZE = 15;
+          const correctionsToReview: PendingReview['items'] = [];
 
-          // Update Progress Start for this file/lang
-          setProgress(prev => ({
-            ...prev,
-            fileIndex: fIndex,
-            langIndex: lIndex,
-            blocksTotal: totalItems,
-            blocksSent: 0,
-            currentFileName: currentFile.name
-          }));
+          setProgress(prev => ({ ...prev, fileIndex: fIndex, langIndex: lIndex, blocksTotal: totalItems, blocksSent: 0, currentFileName: currentFile.name }));
 
-          // --- Process Batches ---
           if (totalItems > 0) {
             for (let i = 0; i < totalItems; i += BATCH_SIZE) {
-              if (stopProcessingRef.current) {
-                setStatus('stopped');
-                return;
-              }
+              if (stopProcessingRef.current) { setStatus('stopped'); return; }
 
               const batch = processingItems.slice(i, i + BATCH_SIZE);
+              const apiRequests = batch.map(item => ({ text: item.text, context: item.context }));
               
-              const apiRequests = batch.map(item => ({
-                text: item.text,
-                context: item.context
-              }));
+              // Call API
+              const results: BatchResponse[] = await gemini.translateBatch(apiRequests, currentLang, mode, shlokaMode);
+              
+              // CRITICAL: Check stop AFTER await to prevent processing delayed results
+              if (stopProcessingRef.current) { setStatus('stopped'); return; }
 
-              const results = await gemini.translateBatch(apiRequests, currentLang, mode);
-              
               batch.forEach((item, idx) => {
+                const res = results[idx];
                 const blockIdx = parseInt(item.blockId.substring(1));
-                if (results[idx] !== undefined) {
-                   baseTargetBlocks[blockIdx].lines[item.lineIndex] = results[idx];
+                
+                // Directly apply text first
+                if (res) {
+                    baseTargetBlocks[blockIdx].lines[item.lineIndex] = res.text;
+                    
+                    // If in convert mode and corrected, add to review list
+                    if (mode === 'convert_encoding' && res.metadata?.wasCorrected) {
+                        correctionsToReview.push({
+                            blockId: item.blockId,
+                            lineIndex: item.lineIndex,
+                            originalDecoded: res.metadata.originalDecoded || "N/A",
+                            suggestedText: res.text,
+                            reason: res.metadata.reason || "Grammar/Fact check",
+                            source: res.metadata.source || "Google Search"
+                        });
+                    }
                 }
               });
 
-              // Update Progress
-              setProgress(prev => ({
-                ...prev,
-                blocksSent: Math.min(i + BATCH_SIZE, totalItems)
-              }));
+              setProgress(prev => ({ ...prev, blocksSent: Math.min(i + BATCH_SIZE, totalItems) }));
             }
           }
 
-          // Reconstruct File
-          let finalOutput = preamble.trimEnd();
-          if (baseTargetBlocks.length > 0) {
-            if (finalOutput.length > 0) finalOutput += '\n\n';
-            baseTargetBlocks.forEach((block, idx) => {
-              const blockContent = block.lines.join('\n').trimEnd();
-              finalOutput += `${block.header}\n${blockContent}`;
-              if (idx < baseTargetBlocks.length - 1) finalOutput += '\n\n';
-            });
-          }
+          // Define how to finalize output
+          const finalizeOutput = (reviewedItems: Record<string, string> = {}) => {
+             // Apply reviews if any
+             if (Object.keys(reviewedItems).length > 0) {
+                 correctionsToReview.forEach(c => {
+                    const key = `${c.blockId}-${c.lineIndex}`;
+                    if (reviewedItems[key]) {
+                        const blockIdx = parseInt(c.blockId.substring(1));
+                        baseTargetBlocks[blockIdx].lines[c.lineIndex] = reviewedItems[key];
+                    }
+                 });
+             }
 
-          // Save Output to State
-          const outputKey = `${currentFile.id}_${currentLang}`;
-          setOutputs(prev => ({ ...prev, [outputKey]: finalOutput }));
-          
-          if (fIndex === 0 && lIndex === 0) {
-            setActiveOutputTab(outputKey);
-          }
+             let finalOutput = preamble.trimEnd();
+             if (baseTargetBlocks.length > 0) {
+                if (finalOutput.length > 0) finalOutput += '\n\n';
+                baseTargetBlocks.forEach((block, idx) => {
+                  finalOutput += `${block.header}\n${block.lines.join('\n').trimEnd()}`;
+                  if (idx < baseTargetBlocks.length - 1) finalOutput += '\n\n';
+                });
+             }
+             const outputKey = `${currentFile.id}_${currentLang}`;
+             setOutputs(prev => ({ ...prev, [outputKey]: finalOutput }));
+             
+             // Auto download conditional check
+             if (autoDownload) {
+                triggerDownload(generateFileName(currentFile.name, currentLang), finalOutput);
+             }
+          };
 
-          // Auto Download
-          const downloadName = generateFileName(currentFile.name, currentLang);
-          triggerDownload(downloadName, finalOutput);
+          // If we have corrections, pause for review
+          if (correctionsToReview.length > 0) {
+             setReviewData({
+                 fileId: currentFile.id,
+                 lang: currentLang,
+                 items: correctionsToReview,
+                 finalOutputBuilder: finalizeOutput
+             });
+             setStatus('done'); // Technically done processing, waiting for review
+             return; // Stop loop to show modal, user will trigger finalize
+          } else {
+             finalizeOutput();
+          }
         }
       }
-
+      
       if (!stopProcessingRef.current) {
         setStatus('done');
-        // Ensure progress shows 100%
         setProgress(prev => ({ ...prev, blocksSent: prev.blocksTotal }));
       }
-
     } catch (err: any) {
       console.error(err);
       setStatus('error');
@@ -300,329 +274,372 @@ function App() {
     }
   };
 
-  const handleManualDownload = (fileId: string, lang: string) => {
-    const key = `${fileId}_${lang}`;
-    const content = outputs[key];
-    const file = files.find(f => f.id === fileId);
-    if (!content || !file) return;
+  const finishReview = (acceptedCorrections: Record<string, string>) => {
+      if (reviewData) {
+          reviewData.finalOutputBuilder(acceptedCorrections);
+          setReviewData(null);
+      }
+  };
 
-    const downloadName = generateFileName(file.name, lang);
-    triggerDownload(downloadName, content);
+  const getActiveOutputContent = () => {
+    const file = files.find(f => f.id === activeFileId);
+    if (!file) return '';
+    for (const lang of selectedLangs) {
+        const key = `${file.id}_${lang}`;
+        if (outputs[key]) return outputs[key];
+    }
+    const anyKey = Object.keys(outputs).find(k => k.startsWith(file.id + '_'));
+    return anyKey ? outputs[anyKey] : '';
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-200 flex flex-col font-sans">
-      {/* Header */}
-      <header className="bg-gray-900 border-b border-gray-800 p-4 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="bg-indigo-600 p-2 rounded-lg">
-              <Sparkles className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-white tracking-tight">AstroLocalize</h1>
-              <p className="text-xs text-gray-400">Astrology Software Localization Tool</p>
-            </div>
+    <div className="h-screen bg-black text-gray-200 flex flex-col font-sans overflow-hidden">
+      
+      {/* --- Top Bar --- */}
+      <header className="bg-gray-900 border-b border-gray-800 p-3 shrink-0 flex items-center justify-between shadow-lg z-20">
+        <div className="flex items-center space-x-3">
+          <div className="bg-indigo-600 p-1.5 rounded-lg shadow-indigo-900/20 shadow-lg">
+            <Sparkles className="w-5 h-5 text-white" />
           </div>
-          <div className="flex items-center space-x-4">
-             {/* API Key management removed as per guidelines */}
+          <div>
+            <h1 className="text-xl font-bold text-gray-100 tracking-tight leading-none font-serif">AstroLocalize</h1>
+            <p className="text-[10px] text-indigo-400 font-medium tracking-wide">AI TRANSLATION & CORRECTION</p>
           </div>
         </div>
+        
+        {/* Central Progress */}
+        {status === 'processing' && (
+           <div className="flex items-center gap-4 bg-gray-800 px-4 py-1.5 rounded-full border border-gray-700 shadow-inner">
+               <span className="text-xs text-indigo-300 font-mono">
+                   {progress.currentFileName}
+               </span>
+               <div className="w-32 bg-gray-700 rounded-full h-1.5">
+                   <div className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+                        style={{ width: `${progress.blocksTotal > 0 ? (progress.blocksSent / progress.blocksTotal) * 100 : 0}%` }}
+                   ></div>
+               </div>
+           </div>
+        )}
+        
+         <div className="flex items-center gap-2">
+            <label className="cursor-pointer text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600 px-4 py-2 rounded-md transition-all flex items-center gap-2 font-medium shadow-sm">
+                <Upload className="w-3.5 h-3.5" />
+                Import Files
+                <input type="file" className="hidden" onChange={handleFileUpload} accept=".txt,.res,.dat" multiple />
+            </label>
+         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 max-w-7xl mx-auto w-full p-4 md:p-6 gap-6 flex flex-col lg:flex-row">
-        
-        {/* Left Column: Input */}
-        <div className="flex-1 flex flex-col gap-4 min-h-[500px]">
-          <div className="bg-gray-900 rounded-xl border border-gray-800 flex flex-col h-full shadow-xl">
-            <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50 rounded-t-xl">
-              <div className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-gray-400" />
-                <span className="font-medium text-gray-200">
-                  {files.length > 1 ? `${files.length} Files Queued` : 'Source File'}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="cursor-pointer text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-md transition-colors border border-gray-700 flex items-center gap-2">
-                  <Upload className="w-3 h-3" />
-                  Select Files
-                  <input type="file" className="hidden" onChange={handleFileUpload} accept=".txt,.res,.dat" multiple />
-                </label>
-              </div>
-            </div>
-
-            {/* File Tabs if multiple */}
-            {files.length > 0 && (
-              <div className="flex px-2 bg-gray-900 border-b border-gray-800 gap-1 overflow-x-auto custom-scrollbar">
-                {files.map((file) => (
-                  <button
-                    key={file.id}
-                    onClick={() => setActiveFileId(file.id)}
-                    className={`px-3 py-2 text-xs max-w-[150px] truncate border-b-2 transition-colors ${
-                      activeFileId === file.id
-                        ? 'border-indigo-500 text-indigo-400 bg-gray-800/50'
-                        : 'border-transparent text-gray-500 hover:text-gray-300'
-                    }`}
-                  >
-                    {file.name}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="flex-1 relative">
-              <textarea 
-                className="w-full h-full bg-gray-950 p-4 text-sm font-mono text-gray-300 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-900/50 custom-scrollbar"
-                value={getActiveFileContent()}
-                onChange={(e) => updateActiveFileContent(e.target.value)}
-                spellCheck={false}
-                placeholder="Paste your source file content here..."
-              />
-            </div>
-            <div className="p-2 bg-gray-900 border-t border-gray-800 text-xs text-gray-500 text-right">
-               {files.length} File(s) | Current: {getActiveFileContent().split('\n').length} Lines
-            </div>
-          </div>
-        </div>
-
-        {/* Middle Column: Controls */}
-        <div className="lg:w-80 flex flex-col gap-6 justify-center">
-          
-          <div className="bg-gray-900 p-5 rounded-xl border border-gray-800 shadow-xl space-y-6">
+      {/* --- Toolbar --- */}
+      <div className="bg-gray-900 border-b border-gray-800 p-3 flex items-center justify-between shrink-0 gap-4">
+         <div className="flex items-center gap-4">
             
-            {/* Mode Selection */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-400 flex items-center gap-2">
-                <Wand2 className="w-4 h-4" /> Processing Mode
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                 <button
-                   onClick={() => setMode('translate')}
-                   className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
-                     mode === 'translate' 
-                     ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' 
-                     : 'bg-gray-950 border-gray-700 text-gray-400 hover:bg-gray-800'
-                   }`}
-                 >
-                   Translate
-                 </button>
-                 <button
-                   onClick={() => setMode('rewrite')}
-                   className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
-                     mode === 'rewrite' 
-                     ? 'bg-teal-600 border-teal-500 text-white shadow-lg' 
-                     : 'bg-gray-950 border-gray-700 text-gray-400 hover:bg-gray-800'
-                   }`}
-                 >
-                   Rewrite/Fix
-                 </button>
-              </div>
-            </div>
-
-            {/* Language Selection */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-400 flex items-center gap-2 justify-between">
-                <div className="flex items-center gap-2">
-                  <Languages className="w-4 h-4" /> Target Languages
-                </div>
-                <span className="text-[10px] bg-gray-800 px-2 py-0.5 rounded-full text-gray-400">
-                    {selectedLangs.length} Selected
-                </span>
-              </label>
-              <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-                {LANGUAGES.map(lang => {
-                  const isSelected = selectedLangs.includes(lang.value);
-                  return (
+            {/* Mode Tabs */}
+            <div className="flex bg-black rounded-lg p-1 border border-gray-700 shadow-sm">
+                {[
+                    { id: 'translate', label: 'Translate', icon: Languages, color: 'bg-indigo-600' },
+                    { id: 'rewrite', label: 'Rewrite', icon: Wand2, color: 'bg-teal-600' },
+                    { id: 'convert_encoding', label: 'Fix KrutiDev', icon: TypeIcon, color: 'bg-orange-600' }
+                ].map(m => (
                     <button
-                        key={lang.value}
-                        onClick={() => toggleLanguage(lang.value)}
-                        className={`flex items-center gap-2 px-2 py-2 rounded-md border text-xs text-left transition-all ${
-                            isSelected 
-                            ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-200' 
-                            : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-700'
+                        key={m.id}
+                        onClick={() => setMode(m.id as ProcessingMode)}
+                        className={`px-4 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-all ${
+                            mode === m.id ? `${m.color} text-white shadow-md` : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
                         }`}
                     >
-                        {isSelected ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
-                        ) : (
-                            <div className="w-3.5 h-3.5 rounded-full border border-gray-600 flex-shrink-0" />
-                        )}
-                        <span className="truncate">{lang.label.split(' ')[0]}</span>
+                        <m.icon className="w-3.5 h-3.5" /> {m.label}
                     </button>
-                  );
-                })}
-              </div>
+                ))}
             </div>
 
-            {/* Dual Sex Toggle */}
-            <div className="space-y-3">
-               <label className="text-sm font-medium text-gray-400 flex items-center gap-2">
-                <Split className="w-4 h-4" /> Output Structure
-              </label>
-              <div 
-                className="bg-gray-950 p-1 rounded-lg border border-gray-700 flex relative cursor-pointer"
+            <div className="h-6 w-px bg-gray-700"></div>
+
+            {/* Language Trigger */}
+            <button 
+                onClick={() => setIsLangModalOpen(true)}
+                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-md text-xs border border-gray-600 text-gray-300 transition-colors"
+            >
+                <Languages className="w-3.5 h-3.5" />
+                {selectedLangs.length} Language{selectedLangs.length !== 1 ? 's' : ''} Selected
+            </button>
+
+            <div className="h-6 w-px bg-gray-700"></div>
+
+             {/* Dual Sex Toggle */}
+             <div 
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all ${
+                    dualSexMode ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
+                }`}
                 onClick={() => setDualSexMode(!dualSexMode)}
-              >
-                <div className={`flex-1 py-2 text-xs text-center font-medium rounded-md transition-all ${!dualSexMode ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400'}`}>
-                  Standard
-                </div>
-                <div className={`flex-1 py-2 text-xs text-center font-medium rounded-md transition-all ${dualSexMode ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400'}`}>
-                  Dual Sex
-                </div>
-              </div>
-              <p className="text-[10px] text-gray-500 leading-tight">
-                Dual Sex mode creates explicit Male (Sex=0) and Female (Sex=1) blocks for every input block.
-              </p>
-            </div>
+                title="Generate Male and Female versions for every block"
+             >
+                <Split className="w-3.5 h-3.5" />
+                <span className="text-xs font-medium">Dual Sex Output</span>
+             </div>
 
-            <hr className="border-gray-800" />
+            {/* Shloka/Transliteration Toggle */}
+            <div 
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all ${
+                    shlokaMode ? 'bg-purple-900/30 border-purple-500/50 text-purple-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
+                }`}
+                onClick={() => setShlokaMode(!shlokaMode)}
+                title="Preserve Shlokas/Mantras by transliterating them phonetically instead of translating meaning"
+             >
+                <Scroll className="w-3.5 h-3.5" />
+                <span className="text-xs font-medium">Transliterate Shlokas</span>
+             </div>
 
-            {/* Action Buttons */}
-            <div className="space-y-3">
-                {status === 'processing' ? (
-                    <Button 
-                        className="w-full py-3 bg-red-600 hover:bg-red-700 text-white focus:ring-red-500" 
-                        onClick={handleStop}
-                    >
-                        <XCircle className="w-4 h-4 mr-2" /> Stop Processing
-                    </Button>
-                ) : (
-                    <Button 
-                        className="w-full py-3" 
-                        onClick={handleProcess}
-                        disabled={files.length === 0}
-                        variant={mode === 'rewrite' ? 'secondary' : 'primary'}
-                    >
-                        {mode === 'rewrite' ? 'Start Rewrite' : 'Start Translation'}
-                    </Button>
-                )}
+             {/* Auto Download Toggle */}
+             <div 
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all ${
+                    autoDownload ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
+                }`}
+                onClick={() => setAutoDownload(!autoDownload)}
+             >
+                <Download className="w-3.5 h-3.5" />
+                <span className="text-xs font-medium">Auto Download</span>
+             </div>
+         </div>
 
-                {/* Progress Bar & Stats */}
-                {status === 'processing' && (
-                  <div className="space-y-3 bg-gray-950/50 p-3 rounded-lg border border-gray-800">
-                    
-                    {/* File Info */}
-                    <div className="flex items-center gap-2 text-xs text-indigo-300">
-                       <Files className="w-3 h-3" />
-                       <span className="truncate max-w-[180px]">File {progress.fileIndex + 1}/{progress.totalFiles}: {progress.currentFileName}</span>
-                    </div>
+         {/* Actions */}
+         <div className="flex items-center gap-2">
+             {status === 'processing' ? (
+                <Button 
+                    variant="ghost" 
+                    className="bg-red-900/30 text-red-400 hover:bg-red-900/50 border border-red-900/50 h-9 text-xs" 
+                    onClick={() => {
+                        stopProcessingRef.current = true;
+                        setStatus('stopped'); // Immediate UI feedback
+                    }}
+                >
+                    <XCircle className="w-3.5 h-3.5 mr-1.5" /> Stop
+                </Button>
+             ) : (
+                <Button className="h-9 text-xs px-6 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/20 border border-indigo-500" onClick={handleProcess} disabled={files.length === 0}>
+                   {mode === 'convert_encoding' ? 'Start Conversion' : mode === 'rewrite' ? 'Start Rewrite' : 'Start Translation'}
+                </Button>
+             )}
+         </div>
+      </div>
 
-                    {/* Language Info */}
-                    <div className="flex items-center gap-2 text-xs text-indigo-300">
-                       <Languages className="w-3 h-3" />
-                       <span>Lang: {LANGUAGES.find(l => l.value === selectedLangs[progress.langIndex])?.label.split(' ')[0]}</span>
-                    </div>
-
-                    {/* Blocks Counter */}
-                    <div className="flex justify-between items-center text-[10px] text-gray-400">
-                      <span className="flex items-center gap-1">
-                        <RefreshCw className="w-3 h-3 animate-spin" />
-                        Blocks Sent: {progress.blocksSent} / {progress.blocksTotal}
-                      </span>
-                      <span className="font-mono text-indigo-400">
-                         {progress.blocksTotal > 0 ? Math.round((progress.blocksSent / progress.blocksTotal) * 100) : 0}%
-                      </span>
-                    </div>
-
-                    {/* Progress Bar */}
-                    <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full transition-all duration-300 ${mode === 'rewrite' ? 'bg-teal-500' : 'bg-indigo-500'}`}
-                          style={{ width: `${progress.blocksTotal > 0 ? (progress.blocksSent / progress.blocksTotal) * 100 : 0}%` }}
-                        ></div>
-                    </div>
+      {/* --- Main Content Split --- */}
+      <div className="flex-1 flex overflow-hidden">
+          {/* Left: Source */}
+          <div className="flex-1 flex flex-col border-r border-gray-800 bg-gray-900/50">
+              <div className="bg-gray-900 border-b border-gray-800 px-4 py-2 flex justify-between items-center shrink-0">
+                  <div className="flex gap-1 overflow-x-auto custom-scrollbar max-w-[70%]">
+                      {files.map(file => (
+                          <button
+                            key={file.id}
+                            onClick={() => setActiveFileId(file.id)}
+                            className={`px-3 py-1 rounded text-xs whitespace-nowrap transition-colors border-b-2 ${
+                                activeFileId === file.id ? 'border-indigo-500 text-indigo-400 bg-gray-800' : 'border-transparent text-gray-500 hover:text-gray-300'
+                            }`}
+                          >
+                              {file.name}
+                          </button>
+                      ))}
                   </div>
-                )}
-
-                {status === 'stopped' && (
-                    <div className="p-3 bg-yellow-900/20 border border-yellow-900/50 rounded-lg text-xs text-yellow-400 text-center">
-                        Process stopped by user.
-                    </div>
-                )}
-
-                {status === 'error' && (
-                <div className="p-3 bg-red-900/20 border border-red-900/50 rounded-lg text-xs text-red-400">
-                    {errorMsg}
-                </div>
-                )}
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column: Output */}
-        <div className="flex-1 flex flex-col gap-4 min-h-[500px]">
-          <div className="bg-gray-900 rounded-xl border border-gray-800 flex flex-col h-full shadow-xl overflow-hidden">
-            
-            {/* Output Header with Tabs */}
-            <div className="border-b border-gray-800 bg-gray-900/50 flex flex-col">
-                <div className="p-4 flex justify-between items-center pb-2">
-                    <div className="flex items-center gap-2">
-                        <ArrowRightLeft className="w-5 h-5 text-indigo-400" />
-                        <span className="font-medium text-gray-200">Results (Auto-Downloading)</span>
-                    </div>
-                    {activeOutputTab && outputs[activeOutputTab] && (
-                        <Button 
-                            variant="secondary" 
-                            size="sm" 
-                            onClick={() => {
-                              const [fId, lCode] = activeOutputTab.split('_');
-                              handleManualDownload(fId, lCode);
-                            }} 
-                            className="gap-2"
-                        >
-                            <Download className="w-4 h-4" /> Download Again
-                        </Button>
-                    )}
-                </div>
-                
-                {/* Result Tabs */}
-                {Object.keys(outputs).length > 0 && (
-                    <div className="flex px-4 gap-2 overflow-x-auto custom-scrollbar pb-0">
-                        {Object.keys(outputs).map(key => {
-                            const [fId, lang] = key.split('_');
-                            const file = files.find(f => f.id === fId);
-                            const langLabel = LANGUAGES.find(l => l.value === lang)?.label.split(' ')[0] || lang;
-                            const displayName = `${file?.name.substring(0, 8)}.. - ${langLabel}`;
-
-                            return (
-                              <button
-                                  key={key}
-                                  onClick={() => setActiveOutputTab(key)}
-                                  className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap ${
-                                      activeOutputTab === key 
-                                      ? 'border-indigo-500 text-indigo-400 bg-gray-800/50 rounded-t-md' 
-                                      : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/30 rounded-t-md'
-                                  }`}
-                                  title={`${file?.name} - ${langLabel}`}
-                              >
-                                  {displayName}
-                              </button>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
-
-            <div className="flex-1 relative">
+                  <span className="text-[10px] uppercase font-bold text-gray-600 tracking-wider">Source</span>
+              </div>
               <textarea 
-                className="w-full h-full bg-gray-950 p-4 text-sm font-mono text-gray-300 resize-none focus:outline-none focus:ring-1 focus:ring-teal-900/50 custom-scrollbar"
-                value={activeOutputTab ? outputs[activeOutputTab] : ''}
-                readOnly
-                placeholder={status === 'processing' ? "Processing files... Please wait." : "Results will appear here."}
+                className="flex-1 w-full bg-transparent p-6 text-sm font-mono text-gray-400 resize-none focus:outline-none focus:bg-gray-900/50 custom-scrollbar leading-relaxed"
+                value={files.find(f => f.id === activeFileId)?.content || ''}
+                onChange={(e) => {
+                    const val = e.target.value;
+                    setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, content: val } : f));
+                }}
+                spellCheck={false}
               />
-            </div>
-            
-            <div className="p-2 bg-gray-900 border-t border-gray-800 text-xs text-gray-500 text-right">
-              {activeOutputTab && outputs[activeOutputTab] 
-                ? `Lines: ${outputs[activeOutputTab].split('\n').length}` 
-                : 'Waiting...'}
-            </div>
           </div>
-        </div>
-      </main>
+
+          {/* Right: Output */}
+          <div className="flex-1 flex flex-col bg-black">
+               <div className="bg-gray-900 border-b border-gray-800 px-4 py-2 flex justify-between items-center shrink-0">
+                  <div className="flex items-center gap-2">
+                      <span className="text-[10px] uppercase font-bold text-gray-600 tracking-wider">
+                          Result {Object.keys(outputs).length > 0 && <span className="text-indigo-500">• Ready</span>}
+                      </span>
+                  </div>
+                  <button 
+                    onClick={() => {
+                        const content = getActiveOutputContent();
+                        if (content) triggerDownload('result.txt', content);
+                    }}
+                    disabled={!getActiveOutputContent()}
+                    className="text-gray-400 hover:text-white disabled:opacity-30 transition-colors"
+                  >
+                      <Download className="w-4 h-4" />
+                  </button>
+              </div>
+              <textarea 
+                className={`flex-1 w-full bg-transparent p-6 text-sm font-mono resize-none focus:outline-none focus:bg-gray-900/50 custom-scrollbar leading-relaxed ${
+                    mode === 'convert_encoding' ? 'text-orange-100' : 'text-gray-200'
+                }`}
+                value={getActiveOutputContent()}
+                readOnly
+                placeholder="Processed output will appear here."
+              />
+          </div>
+      </div>
+
+      {/* --- Language Selection Modal --- */}
+      {isLangModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+                  <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                      <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                          <Languages className="w-5 h-5 text-indigo-500" /> Select Target Languages
+                      </h2>
+                      <button onClick={() => setIsLangModalOpen(false)} className="text-gray-500 hover:text-white">
+                          <XCircle className="w-5 h-5" />
+                      </button>
+                  </div>
+                  <div className="p-4 overflow-y-auto custom-scrollbar grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {LANGUAGES.map(lang => {
+                          const isSelected = selectedLangs.includes(lang.value);
+                          return (
+                              <button
+                                  key={lang.value}
+                                  onClick={() => toggleLanguage(lang.value)}
+                                  className={`flex items-center gap-3 px-3 py-3 rounded-lg border text-sm text-left transition-all ${
+                                      isSelected 
+                                      ? 'bg-indigo-900/30 border-indigo-600/50 text-indigo-200' 
+                                      : 'bg-black border-gray-800 text-gray-400 hover:border-gray-600'
+                                  }`}
+                              >
+                                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${isSelected ? 'border-indigo-500 bg-indigo-500' : 'border-gray-600'}`}>
+                                      {isSelected && <Check className="w-3 h-3 text-black" />}
+                                  </div>
+                                  <span className="font-medium">{lang.label}</span>
+                              </button>
+                          );
+                      })}
+                  </div>
+                  <div className="p-4 border-t border-gray-800 flex justify-end">
+                      <Button onClick={() => setIsLangModalOpen(false)} className="bg-indigo-600 hover:bg-indigo-500 text-white">Done</Button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* --- Review Corrections Modal (Human Feedback Loop) --- */}
+      {reviewData && (
+        <ReviewModal 
+            data={reviewData} 
+            onFinish={finishReview} 
+            onCancel={() => {
+                setReviewData(null);
+                setStatus('idle');
+            }} 
+        />
+      )}
+      
+      {errorMsg && (
+          <div className="absolute bottom-4 right-4 bg-red-900/90 text-white px-4 py-3 rounded-lg shadow-2xl border border-red-700 flex items-center gap-3 z-50">
+              <AlertTriangle className="w-5 h-5" />
+              <span className="text-sm">{errorMsg}</span>
+              <button onClick={() => setErrorMsg('')} className="ml-2 hover:text-red-200">✕</button>
+          </div>
+      )}
     </div>
   );
 }
+
+// Sub-component for Review Modal to keep App clean
+const ReviewModal = ({ data, onFinish, onCancel }: { 
+    data: PendingReview, 
+    onFinish: (r: Record<string, string>) => void,
+    onCancel: () => void 
+}) => {
+    const [decisions, setDecisions] = useState<Record<string, string>>(() => {
+        const initial: Record<string, string> = {};
+        data.items.forEach(item => {
+            initial[`${item.blockId}-${item.lineIndex}`] = item.suggestedText;
+        });
+        return initial;
+    });
+
+    const toggleDecision = (key: string, useOriginal: boolean, original: string, suggested: string) => {
+        setDecisions(prev => ({
+            ...prev,
+            [key]: useOriginal ? original : suggested
+        }));
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-gray-900 border border-indigo-600/30 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+                <div className="p-5 border-b border-gray-800 flex justify-between items-center bg-gray-900 rounded-t-xl">
+                    <div>
+                        <h2 className="text-xl font-bold text-indigo-400 flex items-center gap-2">
+                            <Search className="w-5 h-5" /> Review AI Corrections
+                        </h2>
+                        <p className="text-gray-400 text-xs mt-1">
+                            The AI detected potential errors in the KrutiDev conversion. Please verify using the provided sources.
+                        </p>
+                    </div>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 bg-black">
+                    {data.items.map((item, idx) => {
+                        const key = `${item.blockId}-${item.lineIndex}`;
+                        const isUsingOriginal = decisions[key] === item.originalDecoded;
+
+                        return (
+                            <div key={idx} className="bg-gray-900 border border-gray-800 rounded-lg p-4 shadow-md transition-all hover:border-gray-700">
+                                <div className="flex items-start gap-3 mb-3">
+                                    <AlertTriangle className="w-5 h-5 text-indigo-500 shrink-0 mt-0.5" />
+                                    <div className="flex-1">
+                                        <h4 className="text-sm font-bold text-gray-200">Correction Reason: <span className="text-indigo-400 font-normal">{item.reason}</span></h4>
+                                        {item.source && (
+                                            <a href={item.source} target="_blank" rel="noreferrer" className="text-xs text-blue-400 hover:underline block mt-1">
+                                                Verify Source: {item.source}
+                                            </a>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {/* Option A: Raw Decoding */}
+                                    <div 
+                                        onClick={() => toggleDecision(key, true, item.originalDecoded, item.suggestedText)}
+                                        className={`p-3 rounded border cursor-pointer relative ${
+                                            isUsingOriginal ? 'bg-gray-800 border-gray-500' : 'bg-black border-gray-800 opacity-60 hover:opacity-100'
+                                        }`}
+                                    >
+                                        <div className="text-[10px] uppercase font-bold text-gray-500 mb-2">Original Raw Decoding</div>
+                                        <div className="text-sm font-mono text-gray-300 break-words">{item.originalDecoded}</div>
+                                        {isUsingOriginal && <CheckCircle2 className="absolute top-2 right-2 w-4 h-4 text-gray-400" />}
+                                    </div>
+
+                                    {/* Option B: AI Correction */}
+                                    <div 
+                                        onClick={() => toggleDecision(key, false, item.originalDecoded, item.suggestedText)}
+                                        className={`p-3 rounded border cursor-pointer relative ${
+                                            !isUsingOriginal ? 'bg-indigo-900/20 border-indigo-500 ring-1 ring-indigo-500/20' : 'bg-black border-gray-800 opacity-60 hover:opacity-100'
+                                        }`}
+                                    >
+                                        <div className="text-[10px] uppercase font-bold text-indigo-500 mb-2">AI Suggested Correction</div>
+                                        <div className="text-sm font-mono text-indigo-100 break-words">{item.suggestedText}</div>
+                                        {!isUsingOriginal && <CheckCircle2 className="absolute top-2 right-2 w-4 h-4 text-indigo-500" />}
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <div className="p-5 border-t border-gray-800 bg-gray-900 rounded-b-xl flex justify-end gap-3">
+                    <Button variant="ghost" onClick={onCancel}>Cancel All</Button>
+                    <Button onClick={() => onFinish(decisions)} className="bg-indigo-600 hover:bg-indigo-500 text-white">
+                        Apply Selected Changes
+                    </Button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 export default App;
