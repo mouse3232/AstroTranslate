@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Download, Languages, Split, Sparkles, Wand2, XCircle, CheckCircle2, Files, RefreshCw, Type as TypeIcon, Search, AlertTriangle, ArrowRight, Check, Scroll } from 'lucide-react';
+import { Upload, Download, Languages, Split, Sparkles, Wand2, XCircle, CheckCircle2, Files, RefreshCw, Type as TypeIcon, Search, AlertTriangle, ArrowRight, Check, Scroll, BookOpen } from 'lucide-react';
 import { LANGUAGES } from './constants';
 import { TargetLanguage, ProcessingMode, ProcessingItem, BatchResponse } from './types';
 import { GeminiService } from './services/geminiService';
@@ -51,6 +51,7 @@ function App() {
   const [dualSexMode, setDualSexMode] = useState(false);
   const [autoDownload, setAutoDownload] = useState(true);
   const [shlokaMode, setShlokaMode] = useState(false);
+  const [sanskritMode, setSanskritMode] = useState(false);
   const [status, setStatus] = useState<'idle' | 'processing' | 'done' | 'stopped' | 'error'>('idle');
   
   // Modals
@@ -186,7 +187,7 @@ function App() {
               const apiRequests = batch.map(item => ({ text: item.text, context: item.context }));
               
               // Call API
-              const results: BatchResponse[] = await gemini.translateBatch(apiRequests, currentLang, mode, shlokaMode);
+              const results: BatchResponse[] = await gemini.translateBatch(apiRequests, currentLang, mode, shlokaMode, sanskritMode);
               
               // CRITICAL: Check stop AFTER await to prevent processing delayed results
               if (stopProcessingRef.current) { setStatus('stopped'); return; }
@@ -331,11 +332,11 @@ function App() {
       </header>
 
       {/* --- Toolbar --- */}
-      <div className="bg-gray-900 border-b border-gray-800 p-3 flex items-center justify-between shrink-0 gap-4">
+      <div className="bg-gray-900 border-b border-gray-800 p-3 flex items-center justify-between shrink-0 gap-4 overflow-x-auto custom-scrollbar">
          <div className="flex items-center gap-4">
             
             {/* Mode Tabs */}
-            <div className="flex bg-black rounded-lg p-1 border border-gray-700 shadow-sm">
+            <div className="flex bg-black rounded-lg p-1 border border-gray-700 shadow-sm shrink-0">
                 {[
                     { id: 'translate', label: 'Translate', icon: Languages, color: 'bg-indigo-600' },
                     { id: 'rewrite', label: 'Rewrite', icon: Wand2, color: 'bg-teal-600' },
@@ -353,22 +354,22 @@ function App() {
                 ))}
             </div>
 
-            <div className="h-6 w-px bg-gray-700"></div>
+            <div className="h-6 w-px bg-gray-700 shrink-0"></div>
 
             {/* Language Trigger */}
             <button 
                 onClick={() => setIsLangModalOpen(true)}
-                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-md text-xs border border-gray-600 text-gray-300 transition-colors"
+                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-md text-xs border border-gray-600 text-gray-300 transition-colors shrink-0"
             >
                 <Languages className="w-3.5 h-3.5" />
                 {selectedLangs.length} Language{selectedLangs.length !== 1 ? 's' : ''} Selected
             </button>
 
-            <div className="h-6 w-px bg-gray-700"></div>
+            <div className="h-6 w-px bg-gray-700 shrink-0"></div>
 
              {/* Dual Sex Toggle */}
              <div 
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all ${
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all shrink-0 ${
                     dualSexMode ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
                 }`}
                 onClick={() => setDualSexMode(!dualSexMode)}
@@ -378,21 +379,39 @@ function App() {
                 <span className="text-xs font-medium">Dual Sex Output</span>
              </div>
 
-            {/* Shloka/Transliteration Toggle */}
+            {/* Shloka Transliterate Toggle */}
             <div 
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all ${
-                    shlokaMode ? 'bg-purple-900/30 border-purple-500/50 text-purple-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all shrink-0 ${
+                    shlokaMode && !sanskritMode ? 'bg-purple-900/30 border-purple-500/50 text-purple-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
                 }`}
-                onClick={() => setShlokaMode(!shlokaMode)}
-                title="Preserve Shlokas/Mantras by transliterating them phonetically instead of translating meaning"
+                onClick={() => {
+                   setShlokaMode(!shlokaMode);
+                   if (!shlokaMode) setSanskritMode(false); // Disable conflicting mode
+                }}
+                title="Write Shlokas in target language script (e.g. Hinglish)"
              >
                 <Scroll className="w-3.5 h-3.5" />
-                <span className="text-xs font-medium">Transliterate Shlokas</span>
+                <span className="text-xs font-medium">Transliterate</span>
+             </div>
+
+            {/* Preserve Sanskrit Toggle */}
+            <div 
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all shrink-0 ${
+                    sanskritMode ? 'bg-pink-900/30 border-pink-500/50 text-pink-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
+                }`}
+                onClick={() => {
+                    setSanskritMode(!sanskritMode);
+                    if (!sanskritMode) setShlokaMode(false); // Disable conflicting mode
+                }}
+                title="Always keep Shlokas in Sanskrit Devanagari script, regardless of target language"
+             >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span className="text-xs font-medium">Sanskrit Dev.</span>
              </div>
 
              {/* Auto Download Toggle */}
              <div 
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all ${
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-all shrink-0 ${
                     autoDownload ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-200' : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-800'
                 }`}
                 onClick={() => setAutoDownload(!autoDownload)}
@@ -403,7 +422,7 @@ function App() {
          </div>
 
          {/* Actions */}
-         <div className="flex items-center gap-2">
+         <div className="flex items-center gap-2 shrink-0">
              {status === 'processing' ? (
                 <Button 
                     variant="ghost" 

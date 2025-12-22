@@ -18,7 +18,8 @@ export class GeminiService {
     items: BatchItem[],
     targetLanguage: string,
     mode: ProcessingMode,
-    transliterateShlokas: boolean = false
+    transliterateShlokas: boolean = false,
+    keepSanskrit: boolean = false
   ): Promise<BatchResponse[]> {
     if (items.length === 0) return [];
 
@@ -64,18 +65,27 @@ export class GeminiService {
       instruction = `You are an expert translator. TRANSLATE to ${targetLanguage}.`;
     }
 
-    const shlokaInstruction = transliterateShlokas ? `
-    6. SHLOKA/MANTRA HANDLING (STRICT):
-       - IF the input contains a Sanskrit Shloka, Mantra, or Verse:
-         * DO NOT translate its meaning into English or the target language words.
-         * INSTEAD, TRANSLITERATE it phonetically into the Target Language script.
-       - Case 1: Target is English (or similar Latin script):
-         * Write in "Hinglish" (Romanized Sanskrit). 
-         * Example: "Tum Kaha Ja rhe" or "Om Bhur Bhuva Swaha".
-       - Case 2: Target is Hindi (or Indic script):
-         * Write in standard Sanskrit/Hindi Unicode.
-         * Example: "ॐ भूर्भुवः स्वः".
-    ` : '';
+    let shlokaInstruction = '';
+
+    if (keepSanskrit) {
+      shlokaInstruction = `
+      6. SHLOKA/MANTRA HANDLING (STRICT - PRESERVE DEVANAGARI):
+         - IF the input contains a Sanskrit Shloka, Mantra, or Verse:
+           * DO NOT translate the meaning.
+           * DO NOT transliterate into Latin/Roman script (no Hinglish).
+           * YOU MUST WRITE IT IN ORIGINAL SANSKRIT DEVANAGARI SCRIPT (e.g., "ॐ भूर्भुवः स्वः").
+           * This applies even if the Target Language is English, Spanish, or any other script.
+      `;
+    } else if (transliterateShlokas) {
+      shlokaInstruction = `
+      6. SHLOKA/MANTRA HANDLING (STRICT - PHONETIC TRANSLITERATION):
+         - IF the input contains a Sanskrit Shloka, Mantra, or Verse:
+           * DO NOT translate its meaning.
+           * INSTEAD, TRANSLITERATE it phonetically into the Target Language script.
+           - Case 1: Target is English/Latin based: Write in "Hinglish" (e.g. "Tum Kaha Ja rhe" or "Om Namah Shivaya").
+           - Case 2: Target is Hindi/Indic: Write in that Indic script or Devanagari.
+      `;
+    }
 
     const prompt = `
       ${instruction}
