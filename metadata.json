@@ -1,5 +1,5 @@
 {
-  "name": "AstroLocalize",
+  "name": "AI Translation & Correction",
   "description": "A specialized translation tool for astrology software. Features: Stop/Resume, Multi-language batch processing, Krutidev decoding, Hinglish/Mantra transliteration, Gender-specific personalization (Businessperson -> Businessman/Businesswoman), and Unicode output.",
   "requestFramePermissions": []
 }

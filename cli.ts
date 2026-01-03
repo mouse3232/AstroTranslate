@@ -1,3 +1,4 @@
+
 import fs from 'fs/promises';
 import path from 'path';
 import { GeminiService } from './services/geminiService';
@@ -70,7 +71,8 @@ async function main() {
     return;
   }
   
-  const gemini = new GeminiService(API_KEY!);
+  // Initialize GeminiService without parameters to use process.env.API_KEY internally
+  const gemini = new GeminiService();
 
   for (const fileName of inputFiles) {
     console.log(`\x1b[33mProcessing: ${fileName}...\x1b[0m`);
