@@ -1,6 +1,6 @@
 
 import React, { useRef } from 'react';
-import { Upload, FileCode } from 'lucide-react';
+import { Upload, FileCode, FileUp } from 'lucide-react';
 
 interface FileUploadProps {
   onFileSelect: (content: string, fileName: string) => void;
@@ -35,20 +35,20 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }) => {
       <div 
         onClick={() => !disabled && fileInputRef.current?.click()}
         className={`
-          border-2 border-dashed rounded-3xl p-12 text-center cursor-pointer transition-all duration-300
+          group relative border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all duration-300
           ${disabled 
-            ? 'border-gray-800 bg-gray-900/20 opacity-50 cursor-not-allowed' 
-            : 'border-indigo-500/30 bg-indigo-500/5 hover:bg-indigo-500/10 hover:border-indigo-400 hover:shadow-[0_0_30px_rgba(79,70,229,0.1)]'
+            ? 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed' 
+            : 'border-slate-300 bg-slate-50 hover:bg-white hover:border-primary-500 hover:shadow-md'
           }
         `}
       >
-        <div className="flex flex-col items-center gap-4">
-          <div className={`p-5 rounded-full ${disabled ? 'bg-gray-800' : 'bg-indigo-500/20 text-indigo-400'}`}>
-            <FileCode className="w-8 h-8" />
+        <div className="flex flex-col items-center gap-5 relative z-10">
+          <div className={`p-4 rounded-full transition-transform duration-300 group-hover:scale-110 ${disabled ? 'bg-slate-100 text-slate-400' : 'bg-white text-primary-600 shadow-md group-hover:bg-primary-600 group-hover:text-white'}`}>
+            <FileUp className="w-6 h-6 stroke-[2]" />
           </div>
-          <div>
-            <h3 className="text-lg font-black text-gray-200 uppercase tracking-tight">Select Resource File</h3>
-            <p className="text-gray-500 text-[11px] font-bold uppercase tracking-widest mt-2">Supports .js, .ts, .json, .txt, .res, .dat</p>
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-slate-700 group-hover:text-slate-900 transition-colors">Select Resource File</h3>
+            <p className="text-slate-500 text-[11px] font-medium tracking-wide">Supports .js, .ts, .json, .txt, .res</p>
           </div>
         </div>
       </div>

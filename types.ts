@@ -85,6 +85,7 @@ export interface DatabaseTask {
   columns: string[];
   rowCount: number;
   hasSexCol: boolean;
+  sexColName?: string;
 }
 
 // Workspace Types

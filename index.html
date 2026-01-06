@@ -4,26 +4,75 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Translation & Correction</title>
+    <title>AI Translation Suite</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/sql-wasm.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+            },
+            colors: {
+              slate: {
+                50: '#f8fafc',
+                100: '#f1f5f9',
+                200: '#e2e8f0',
+                300: '#cbd5e1',
+                400: '#94a3b8',
+                500: '#64748b',
+                600: '#475569',
+                700: '#334155',
+                800: '#1e293b',
+                900: '#0f172a',
+                950: '#020617',
+              },
+              primary: {
+                500: '#8b5cf6',
+                600: '#7c3aed', // Punchy Violet
+                700: '#6d28d9',
+              }
+            }
+          }
+        }
+      }
+    </script>
     <style>
-      body { font-family: 'Inter', sans-serif; }
-      /* Custom scrollbar for code editors */
+      body { 
+        font-family: 'Inter', sans-serif; 
+        background-color: #FFFFFF; /* Mandatory Pure White */
+        color: #0f172a; /* slate-900 */
+      }
+      
+      /* Precision Scrollbar - Light Theme */
       .custom-scrollbar::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
       }
       .custom-scrollbar::-webkit-scrollbar-track {
-        background: #1e1e1e; 
+        background: transparent; 
       }
       .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: #4b5563; 
-        border-radius: 4px;
+        background: #cbd5e1; /* slate-300 */
+        border-radius: 3px;
       }
       .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: #6b7280; 
+        background: #94a3b8; /* slate-400 */
+      }
+
+      /* Premium Selection */
+      ::selection {
+        background-color: #7c3aed; /* violet-600 */
+        color: #ffffff;
+      }
+      
+      /* Subtle Focus Rings */
+      *:focus-visible {
+        outline: 2px solid #7c3aed;
+        outline-offset: 2px;
       }
     </style>
   <script type="importmap">
@@ -42,7 +91,7 @@
 }
 </script>
 </head>
-  <body class="bg-gray-950 text-gray-100">
+  <body class="bg-white text-slate-900 antialiased selection:bg-primary-600 selection:text-white">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
   </body>
