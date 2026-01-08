@@ -25,3 +25,26 @@
     "vite": "^6.2.0"
   }
 }
+{
+  "bin": "launcher.js",
+  "scripts": {
+    "build:frontend": "vite build",
+    "build:exe": "pkg ."
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": [
+      "dist/**/*",
+      "server.js",
+      "services/**/*",
+      "utils/**/*",
+      "metadata.json"
+    ],
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "release"
+  }
+}
