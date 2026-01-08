@@ -1,12 +1,13 @@
 // launcher.js - CommonJS entry for pkg EXE
+
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-// Directory where the EXE lives
+// Directory where the EXE is located
 const EXE_DIR = path.dirname(process.execPath);
 
-// Workspace folder for storing server files
+// Workspace folder (created next to EXE)
 const WORKSPACE_DIR = path.join(EXE_DIR, "workspace");
 if (!fs.existsSync(WORKSPACE_DIR)) {
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
@@ -15,11 +16,13 @@ if (!fs.existsSync(WORKSPACE_DIR)) {
   console.log("ℹ️ Workspace exists at:", WORKSPACE_DIR);
 }
 
-// Path to project files inside EXE
+// Directory inside exe where scripts exist
 const APP_DIR = __dirname;
 
-// Helper to start a node process
-function start(script, args = []) {
+// Helper to start a Node process
+function start(script, args) {
+  if (!args) args = [];
+
   const child = spawn(
     process.execPath,
     [path.join(APP_DIR, script), ...args],
@@ -34,15 +37,19 @@ function start(script, args = []) {
     console.log(`❌ ${script} exited with code ${code}`);
   });
 
+  child.on("error", (err) => {
+    console.error(`Failed to start ${script}:`, err);
+  });
+
   return child;
 }
 
 console.log("🚀 Starting servers...");
 
-// Start backend server on 3000
+// Start backend server on port 3000
 start("server.js");
 
-// Start model/dev server on 3001 (ensure cli.js exists)
+// Start model/dev server on port 3001
 start("cli.js");
 
 console.log("✅ All services started");
