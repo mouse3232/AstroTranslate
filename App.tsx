@@ -3,7 +3,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { 
   Upload, Download, Languages, Split, Sparkles, Wand2, XCircle, 
   CheckCircle2, RefreshCw, Check, Scroll, BookOpen, Info, HelpCircle, 
-  FileText, ChevronRight, Settings2, ChevronDown, ChevronUp, AlertCircle, FileCode, Code, Database, Search, Filter, List, FolderOpen, Trash2, Save, File, HardDrive, ArrowRightLeft, Key, Terminal, DownloadCloud, LayoutTemplate, X, LogOut
+  FileText, ChevronRight, Settings2, ChevronDown, ChevronUp, AlertCircle, FileCode, Code, Database, Search, Filter, List, FolderOpen, Trash2, Save, File, HardDrive, ArrowRightLeft, Key, Terminal, DownloadCloud, LayoutTemplate, X, LogOut, User, PlusCircle
 } from 'lucide-react';
 import { LANGUAGES } from './constants';
 import { 
@@ -11,10 +11,12 @@ import {
   AppStatus, SourceLanguage, ResourceTranslationResult, ProcessingError, DatabaseTask, StoredFile 
 } from './types';
 import { GeminiService } from './services/geminiService';
+import { workspaceService } from './services/workspaceService';
 import { parseInputFile, identifyTranslatableLines, getGenderFromHeader, updateHeaderSex } from './utils/parser';
 import { Button } from './components/Button';
 import FileUpload from './components/FileUpload';
 import CodeBlock from './components/CodeBlock';
+import { WorkspaceDrawer } from './components/WorkspaceDrawer';
 
 type AppModule = 'predictions' | 'resources' | 'database';
 
@@ -28,6 +30,48 @@ interface LogEntry {
   timestamp: string;
   module: string;
   message: string;
+}
+
+// --- BATCH QUEUE UTILITY ---
+// Helper to process items with controlled concurrency (e.g., 50 parallel requests)
+async function processBatchQueue<T>(
+  items: T[], 
+  batchSize: number, 
+  concurrency: number,
+  processFn: (batch: T[], startIndex: number) => Promise<void>,
+  onProgress: (processedCount: number) => void,
+  checkStop: () => boolean
+) {
+  // 1. Chunk items
+  const chunks: { data: T[], index: number }[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    chunks.push({ data: items.slice(i, i + batchSize), index: i });
+  }
+
+  // 2. Queue workers
+  const queue = [...chunks];
+  let processedCount = 0;
+
+  const worker = async (): Promise<void> => {
+    while (queue.length > 0) {
+      if (checkStop()) return;
+      const job = queue.shift();
+      if (!job) break;
+
+      try {
+        await processFn(job.data, job.index);
+        processedCount += job.data.length;
+        onProgress(processedCount);
+      } catch (err) {
+        console.error("Batch processing error (handled in worker):", err);
+        // We continue processing other batches even if one fails
+      }
+    }
+  };
+
+  // 3. Start workers
+  const workers = Array(Math.min(concurrency, chunks.length)).fill(null).map(() => worker());
+  await Promise.all(workers);
 }
 
 // --- HELPER COMPONENTS (STYLED) ---
@@ -120,7 +164,7 @@ const TerminalWindow = ({ logs }: { logs: LogEntry[] }) => {
           logs.map((log, i) => (
             <div key={i} className="flex gap-3 border-b border-slate-50 pb-1">
               <span className="text-slate-400 shrink-0 select-none">[{log.timestamp}]</span>
-              <span className={`font-bold shrink-0 ${log.module === 'DB' ? 'text-pink-600' : log.module === 'RES' ? 'text-blue-600' : 'text-primary-600'}`}>[{log.module}]</span>
+              <span className={`font-bold shrink-0 ${log.module === 'ERR' ? 'text-red-600' : log.module === 'DB' ? 'text-pink-600' : log.module === 'RES' ? 'text-blue-600' : 'text-primary-600'}`}>[{log.module}]</span>
               <span className="text-slate-600">{log.message}</span>
             </div>
           ))
@@ -134,17 +178,44 @@ export default function App() {
   const [activeModule, setActiveModule] = useState<AppModule>('predictions');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  
+  // Refs to expose load methods from modules
+  const predictionsRef = useRef<{ loadFile: (f: StoredFile) => void }>(null);
+  const resourcesRef = useRef<{ loadFile: (f: StoredFile) => void }>(null);
+  const databaseRef = useRef<{ loadFile: (f: StoredFile) => void }>(null);
 
   const addLog = useCallback((module: string, message: string) => {
     setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), module, message }]);
   }, []);
 
-  const saveApiKey = (key: string) => {
-    setApiKey(key);
-    localStorage.setItem('gemini_api_key', key);
+  const saveSettings = (newKey: string) => {
+    setApiKey(newKey);
+    localStorage.setItem('gemini_api_key', newKey);
     setIsSettingsOpen(false);
+  };
+
+  const handleWorkspaceLoad = (file: StoredFile) => {
+    if (file.module !== activeModule) {
+      alert(`Cannot load ${file.module} file into ${activeModule} module.`);
+      return;
+    }
+    
+    try {
+      if (activeModule === 'predictions' && predictionsRef.current) {
+        predictionsRef.current.loadFile(file);
+      } else if (activeModule === 'resources' && resourcesRef.current) {
+        resourcesRef.current.loadFile(file);
+      } else if (activeModule === 'database' && databaseRef.current) {
+        databaseRef.current.loadFile(file);
+      }
+      setIsWorkspaceOpen(false);
+      addLog('SYS', `Loaded file from workspace: ${file.name}`);
+    } catch (e: any) {
+      addLog('ERR', `Failed to load file: ${e.message}`);
+    }
   };
 
   // Nav Item Component
@@ -186,6 +257,11 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2">
+           <button onClick={() => setIsWorkspaceOpen(true)} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-700 transition-colors border border-transparent hover:border-slate-200 font-bold text-[11px] uppercase tracking-wide" title="Workspace">
+              <HardDrive className="w-4 h-4 text-primary-600" />
+              Workspace
+           </button>
+           <div className="h-6 w-px bg-slate-200 mx-1"></div>
            <button onClick={() => setIsHelpOpen(true)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-primary-600 transition-colors" title="Documentation">
               <HelpCircle className="w-5 h-5" />
            </button>
@@ -194,6 +270,14 @@ export default function App() {
            </button>
         </div>
       </header>
+
+      {/* --- WORKSPACE DRAWER --- */}
+      <WorkspaceDrawer 
+        isOpen={isWorkspaceOpen} 
+        onClose={() => setIsWorkspaceOpen(false)} 
+        activeModule={activeModule}
+        onLoadFile={handleWorkspaceLoad}
+      />
 
       {/* --- SETTINGS MODAL --- */}
       {isSettingsOpen && (
@@ -204,13 +288,14 @@ export default function App() {
                  <button onClick={() => setIsSettingsOpen(false)}><XCircle className="w-5 h-5 text-slate-400 hover:text-slate-600" /></button>
               </div>
               <div className="space-y-4">
+                 
                  <div>
                     <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">API Key</label>
                     <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 transition-all">
                        <Key className="w-4 h-4 text-slate-400 mr-2" />
                        <input 
-                         type="password" 
-                         className="bg-transparent border-none text-slate-800 text-sm focus:outline-none flex-1 py-2.5 placeholder-slate-400"
+                         type="text" 
+                         className="bg-transparent border-none text-slate-800 text-sm focus:outline-none flex-1 py-2.5 placeholder-slate-400 font-mono"
                          placeholder="Paste your API key..."
                          defaultValue={apiKey}
                          onChange={(e) => setApiKey(e.target.value)}
@@ -218,8 +303,9 @@ export default function App() {
                     </div>
                     <p className="text-[10px] text-slate-500 mt-2">Key is stored locally in your browser.</p>
                  </div>
+
                  <div className="flex justify-end mt-6">
-                    <Button onClick={() => saveApiKey(apiKey)} variant="primary">Save Changes</Button>
+                    <Button onClick={() => saveSettings(apiKey)} variant="primary">Save Changes</Button>
                  </div>
               </div>
            </div>
@@ -238,18 +324,23 @@ export default function App() {
                  <button onClick={() => setIsHelpOpen(false)}><XCircle className="w-6 h-6 text-slate-400 hover:text-slate-600" /></button>
               </div>
               <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar bg-slate-50">
-                {/* Content similar to previous but styled for light mode */}
+                 <section className="space-y-3">
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><HardDrive className="w-4 h-4 text-primary-600"/> Persistent Workspace</h3>
+                  <div className="bg-white p-5 rounded-xl border border-slate-200 text-sm text-slate-600 space-y-4 leading-relaxed shadow-sm">
+                    <p>The application features a server-backed persistent workspace.</p>
+                    <ul className="list-disc pl-5 space-y-2 text-slate-500">
+                      <li><strong>Persistence:</strong> Files are saved to the server's disk, ensuring they are never lost.</li>
+                      <li><strong>Single User Mode:</strong> All sessions share the same 'default' workspace folder on the server.</li>
+                      <li><strong>Auto-Save:</strong> All imported source files and generated translations/logs are automatically saved.</li>
+                    </ul>
+                  </div>
+                </section>
                  <section className="space-y-3">
                   <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><FileText className="w-4 h-4 text-primary-600"/> Predictions Module</h3>
                   <div className="bg-white p-5 rounded-xl border border-slate-200 text-sm text-slate-600 space-y-4 leading-relaxed shadow-sm">
                     <p>Designed for processing structured astrology block files.</p>
-                    <ul className="list-disc pl-5 space-y-2 text-slate-500">
-                      <li><strong>Dual Sex:</strong> 100% Deterministic. 'Businessperson' becomes 'Businessman' (Sex=0) or 'Businesswoman' (Sex=1). Neutral terms are strictly avoided if a gendered term exists.</li>
-                      <li><strong>Rewrite Mode:</strong> Disables Translit/Sanskrit options. Focuses on grammar and font decoding.</li>
-                    </ul>
                   </div>
                 </section>
-                {/* ... other sections ... */}
               </div>
            </div>
         </div>
@@ -257,15 +348,15 @@ export default function App() {
 
       {/* --- MAIN CONTENT AREA --- */}
       <div className={`flex-1 overflow-hidden flex flex-col ${activeModule === 'predictions' ? 'flex' : 'hidden'}`}>
-        <PredictionsModule customApiKey={apiKey} addLog={addLog} />
+        <PredictionsModule customApiKey={apiKey} addLog={addLog} ref={predictionsRef} />
       </div>
 
       <div className={`flex-1 overflow-hidden flex flex-col ${activeModule === 'resources' ? 'flex' : 'hidden'}`}>
-        <ResourcesModule customApiKey={apiKey} addLog={addLog} />
+        <ResourcesModule customApiKey={apiKey} addLog={addLog} ref={resourcesRef} />
       </div>
 
       <div className={`flex-1 overflow-hidden flex flex-col ${activeModule === 'database' ? 'flex' : 'hidden'}`}>
-        <DatabaseModule customApiKey={apiKey} addLog={addLog} />
+        <DatabaseModule customApiKey={apiKey} addLog={addLog} ref={databaseRef} />
       </div>
 
       <TerminalWindow logs={logs} />
@@ -276,7 +367,7 @@ export default function App() {
 /**
  * MODULE 1: PREDICTIONS TOOL (Block Based)
  */
-function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, addLog: (m: string, msg: string) => void }) {
+const PredictionsModule = React.forwardRef(({ customApiKey, addLog }: { customApiKey: string, addLog: (m: string, msg: string) => void }, ref) => {
   const [files, setFiles] = useState<FileData[]>([
     { name: 'Default_Example.txt', content: `FileHeader.txt\n\n#* Planet=0,Case=0\n##*Text\nYou have debilitated Jupiter in lagna which is under the influence of <PlanetInfluence>.\nAs a successful businessperson, you should recite Hanuman Chalisa daily.\n\n#* Planet=0,Case=1\n##*Text\nv©"kf/k ef.k  ea=k.kka]  xzg&u{k=  rkfjdk A\nÒkX;dkys ÒosfRlf)% vÒkX;a fu"Qya Òosr AA`, id: 'default' }
   ]);
@@ -294,17 +385,32 @@ function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, add
   const [progress, setProgress] = useState({ blocksSent: 0, blocksTotal: 0, currentFileName: '' });
   const stopProcessingRef = useRef(false);
 
-  // Toggle Logic for Translate Mode exclusivity
-  const handleShlokaClick = () => {
-    const newVal = !shlokaMode;
-    setShlokaMode(newVal);
-    if (newVal) setSanskritMode(false);
-  };
+  // Expose load method
+  React.useImperativeHandle(ref, () => ({
+    loadFile: (file: StoredFile) => {
+      if (typeof file.content !== 'string') throw new Error("File content must be string");
+      const newId = Math.random().toString(36).substr(2, 9);
+      setFiles(p => [...p, { name: file.name, content: file.content as string, id: newId }]);
+      setActiveFileId(newId);
+    }
+  }));
 
-  const handleSanskritClick = () => {
-    const newVal = !sanskritMode;
-    setSanskritMode(newVal);
-    if (newVal) setShlokaMode(false);
+  // Helper to save to workspace
+  const saveToWorkspace = async (name: string, content: string, type: 'source' | 'destination') => {
+    try {
+      await workspaceService.saveFile({
+        id: Math.random().toString(36).substr(2, 9),
+        name,
+        content,
+        type,
+        mimeType: 'text/plain',
+        size: new Blob([content]).size,
+        createdAt: new Date(),
+        module: 'predictions'
+      });
+    } catch (e: any) {
+      addLog('ERR', `Workspace Save Failed (${type}): ${e.message}`);
+    }
   };
 
   const downloadFile = (fileName: string, content: string) => {
@@ -318,6 +424,9 @@ function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, add
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     addLog('SYS', `Downloaded: ${fileName}`);
+    
+    // Auto Save to Workspace
+    saveToWorkspace(fileName, content, 'destination');
   };
 
   const handleStop = () => {
@@ -373,25 +482,33 @@ function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, add
           const totalItems = processingItems.length;
           setProgress(p => ({ ...p, blocksTotal: totalItems, blocksSent: 0 }));
           
-          const BATCH_SIZE = 10;
-          for (let i = 0; i < totalItems; i += BATCH_SIZE) {
-            if (stopProcessingRef.current) { setStatus('stopped'); return; }
-            const batch = processingItems.slice(i, i + BATCH_SIZE);
-            
-            addLog('PRED', `Sending batch ${Math.floor(i/BATCH_SIZE)+1}/${Math.ceil(totalItems/BATCH_SIZE)}`);
-            
-            const results: BatchResponse[] = await gemini.translateBatch(
-              batch.map(item => ({ text: item.text, context: item.context })), 
-              currentLang, 
-              mode, 
-              shlokaMode, 
-              sanskritMode
+          const BATCH_SIZE = 12; // Slightly smaller batch size for better granularity with parallelism
+          const CONCURRENCY_LIMIT = 50; // High concurrency
+
+          // Execute Parallel Processing
+          if (totalItems > 0) {
+            await processBatchQueue(
+              processingItems,
+              BATCH_SIZE,
+              CONCURRENCY_LIMIT,
+              async (batch, startIndex) => {
+                const results: BatchResponse[] = await gemini.translateBatch(
+                  batch.map(item => ({ text: item.text, context: item.context })), 
+                  currentLang, 
+                  mode, 
+                  shlokaMode, 
+                  sanskritMode
+                );
+                batch.forEach((item, idx) => {
+                   const blockIdx = parseInt(item.blockId.substring(1));
+                   if (results[idx]) baseTargetBlocks[blockIdx].lines[item.lineIndex] = results[idx].text;
+                });
+              },
+              (processedCount) => {
+                  setProgress(prev => ({ ...prev, blocksSent: processedCount }));
+              },
+              () => stopProcessingRef.current
             );
-            batch.forEach((item, idx) => {
-              const blockIdx = parseInt(item.blockId.substring(1));
-              if (results[idx]) baseTargetBlocks[blockIdx].lines[item.lineIndex] = results[idx].text;
-            });
-            setProgress(prev => ({ ...prev, blocksSent: Math.min(i + BATCH_SIZE, totalItems) }));
           }
 
           let finalOutput = preamble.trimEnd() + '\n\n';
@@ -403,8 +520,16 @@ function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, add
           setOutputs(prev => ({ ...prev, [outputKey]: finalOutput }));
           addLog('PRED', `Completed ${currentLang} for ${currentFile.name}`);
           
-          // Auto Download 
-          downloadFile(`${currentFile.name}_${currentLang}.txt`, finalOutput);
+          // Auto Download with CORRECT NAMING CONVENTION
+          const nameWithoutExt = currentFile.name.replace(/\.[^/.]+$/, "");
+          let options = "";
+          if (dualSexMode) options += "_dual_sex";
+          if (shlokaMode) options += "_translit";
+          if (sanskritMode) options += "_sanskrit";
+          
+          const finalFileName = `${nameWithoutExt}_${mode}${options}_${currentLang}.txt`;
+          
+          downloadFile(finalFileName, finalOutput);
         }
       }
       setStatus('done');
@@ -438,6 +563,35 @@ function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, add
     });
   }
 
+  // Handle File Import
+  const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+     // Explicitly type 'f' as File to avoid 'unknown' type error
+     if (e.target.files) Array.from(e.target.files).forEach((f: File) => {
+       const r = new FileReader(); 
+       r.onload = (ev) => {
+         const newId = Math.random().toString(36).substr(2, 9);
+         const content = ev.target?.result as string;
+         setFiles(p => [...p, { name: f.name, content: content, id: newId }]);
+         setActiveFileId(newId);
+         // Auto Save Source
+         saveToWorkspace(f.name, content, 'source');
+       };
+       r.readAsText(f);
+     });
+  };
+
+  const handleShlokaClick = () => {
+    const newVal = !shlokaMode;
+    setShlokaMode(newVal);
+    if (newVal) setSanskritMode(false);
+  };
+
+  const handleSanskritClick = () => {
+    const newVal = !sanskritMode;
+    setSanskritMode(newVal);
+    if (newVal) setShlokaMode(false);
+  };
+
   return (
     <>
       {/* Control Bar */}
@@ -449,18 +603,25 @@ function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, add
         
         <div className="h-6 w-px bg-slate-200"></div>
 
-        <div className={`flex flex-col gap-1.5 ${mode === 'rewrite' ? 'opacity-40 pointer-events-none' : ''}`}>
+        <div className={`flex items-center gap-2 ${mode === 'rewrite' ? 'opacity-40 pointer-events-none' : ''}`}>
           <button onClick={() => setIsLangModalOpen(true)} className="bg-white hover:bg-slate-50 px-4 h-9 rounded-lg text-[11px] font-bold border border-slate-200 text-slate-600 flex items-center gap-2 transition-colors">
             <Languages className="w-3.5 h-3.5 text-slate-400"/> {selectedLangs.length} Selected
           </button>
+          {selectedLangs.includes(TargetLanguage.Other) && (
+             <input 
+                type="text" 
+                className="h-9 border border-slate-200 rounded-lg px-3 text-[11px] text-slate-800 w-40 focus:border-primary-500 outline-none font-bold bg-white"
+                placeholder="Type Language..."
+                value={customLangInput}
+                onChange={(e) => setCustomLangInput(e.target.value)}
+             />
+          )}
         </div>
 
         <div className="h-6 w-px bg-slate-200"></div>
 
         <div className="flex gap-2">
           <OptionToggle active={dualSexMode} onClick={() => setDualSexMode(!dualSexMode)} icon={<Split className="w-3.5 h-3.5"/>} label="Dual Sex" tooltip="Separate Sex=0 and Sex=1 output." />
-          
-          {/* Strict Requirement: Hide these in Rewrite mode */}
           <OptionToggle active={shlokaMode} onClick={handleShlokaClick} icon={<Scroll className="w-3.5 h-3.5"/>} label="Translit" tooltip="Phonetic Mantras." disabled={mode === 'rewrite'} />
           <OptionToggle active={sanskritMode} onClick={handleSanskritClick} icon={<BookOpen className="w-3.5 h-3.5"/>} label="Keep Sanskrit" tooltip="Keep Shlokas in Devanagari." disabled={mode === 'rewrite'} />
         </div>
@@ -482,18 +643,7 @@ function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, add
               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Source Input</span>
               <div className="flex items-center gap-3">
                  <button onClick={() => document.getElementById('blockInput')?.click()} className="text-[10px] font-bold text-slate-500 hover:text-primary-600 transition-colors">Import Files</button>
-                 <input id="blockInput" type="file" multiple className="hidden" onChange={(e) => {
-                    if (e.target.files) Array.from(e.target.files).forEach(f => {
-                      const r = new FileReader(); 
-                      r.onload = (ev) => {
-                        const newId = Math.random().toString(36).substr(2, 9);
-                        const content = ev.target?.result as string;
-                        setFiles(p => [...p, { name: f.name, content: content, id: newId }]);
-                        setActiveFileId(newId);
-                      };
-                      r.readAsText(f);
-                    });
-                  }} />
+                 <input id="blockInput" type="file" multiple className="hidden" onChange={handleFileImport} />
               </div>
             </div>
             
@@ -599,12 +749,12 @@ function PredictionsModule({ customApiKey, addLog }: { customApiKey: string, add
       )}
     </>
   );
-}
+});
 
 /**
  * MODULE 2: RESOURCE LOCALIZER (Code Based)
  */
-function ResourcesModule({ customApiKey, addLog }: { customApiKey: string, addLog: (m: string, msg: string) => void }) {
+const ResourcesModule = React.forwardRef(({ customApiKey, addLog }: { customApiKey: string, addLog: (m: string, msg: string) => void }, ref) => {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [resourceType, setResourceType] = useState<'code' | 'text'>('code'); 
   const [sourceLang, setSourceLang] = useState<SourceLanguage>(SourceLanguage.ENGLISH);
@@ -615,12 +765,39 @@ function ResourcesModule({ customApiKey, addLog }: { customApiKey: string, addLo
   const [progress, setProgress] = useState<{ current: number, total: number }>({ current: 0, total: 0 });
   const stopProcessingRef = useRef(false);
 
-  const handleFileSelect = useCallback((content: string, fileName: string) => {
+  // Expose load method
+  React.useImperativeHandle(ref, () => ({
+    loadFile: (file: StoredFile) => {
+      if (typeof file.content !== 'string') throw new Error("File content must be string");
+      setResult({ originalFileName: file.name, originalContent: file.content as string, translatedContent: '' });
+      addLog('RES', `Loaded file from workspace: ${file.name}`);
+      setStatus(AppStatus.IDLE);
+      setError(null);
+    }
+  }));
+
+  const handleFileSelect = useCallback(async (content: string, fileName: string) => {
     setResult({ originalFileName: fileName, originalContent: content, translatedContent: '' });
     addLog('RES', `Loaded file: ${fileName}`);
     setStatus(AppStatus.IDLE);
     setError(null);
     setProgress({ current: 0, total: 0 });
+
+    // Auto Save Source
+    try {
+        await workspaceService.saveFile({
+            id: Math.random().toString(36).substr(2, 9),
+            name: fileName,
+            content,
+            type: 'source',
+            mimeType: 'text/plain',
+            size: new Blob([content]).size,
+            createdAt: new Date(),
+            module: 'resources'
+        });
+    } catch (e: any) {
+        addLog('ERR', `Workspace Save Failed (source): ${e.message}`);
+    }
   }, [addLog]);
 
   const handleStop = () => {
@@ -664,6 +841,27 @@ function ResourcesModule({ customApiKey, addLog }: { customApiKey: string, addLo
       setResult(prev => prev ? { ...prev, translatedContent: translated } : null);
       setStatus(AppStatus.COMPLETED);
       addLog('RES', `Translation completed successfully.`);
+
+      // Auto Save Result
+      try {
+          const nameParts = result.originalFileName.split('.');
+          const ext = nameParts.pop();
+          const newName = `${nameParts.join('.')}_${effectiveLang.toLowerCase()}.${ext}`;
+          
+          await workspaceService.saveFile({
+              id: Math.random().toString(36).substr(2, 9),
+              name: newName,
+              content: translated,
+              type: 'destination',
+              mimeType: 'text/plain',
+              size: new Blob([translated]).size,
+              createdAt: new Date(),
+              module: 'resources'
+          });
+      } catch (e: any) {
+          addLog('ERR', `Workspace Save Failed (dest): ${e.message}`);
+      }
+
     } catch (err: any) {
       if (err.message.includes('stopped')) {
         addLog('RES', 'Translation stopped by user.');
@@ -693,7 +891,7 @@ function ResourcesModule({ customApiKey, addLog }: { customApiKey: string, addLo
   };
 
   return (
-    <main className="flex-1 flex flex-col p-8 gap-8 overflow-hidden bg-white">
+    <main className="flex-1 flex flex-col p-8 gap-6 overflow-hidden relative bg-white">
       {!result ? (
         <div className="max-w-xl mx-auto w-full flex flex-col gap-8 items-center justify-center h-full">
            <div className="text-center space-y-3">
@@ -798,14 +996,20 @@ function ResourcesModule({ customApiKey, addLog }: { customApiKey: string, addLo
       )}
     </main>
   );
-}
+});
 
 /**
  * MODULE 3: DATABASE LOCALIZER (direct SQLite handling)
  */
-function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog: (m: string, msg: string) => void }) {
+const DatabaseModule = React.forwardRef(({ customApiKey, addLog }: { customApiKey: string, addLog: (m: string, msg: string) => void }, ref) => {
   const [db, setDb] = useState<any>(null); // Source DB
   const [dbBuffer, setDbBuffer] = useState<Uint8Array | null>(null);
+  
+  // Target DB State
+  const [targetDb, setTargetDb] = useState<any>(null);
+  const [targetDbBuffer, setTargetDbBuffer] = useState<Uint8Array | null>(null);
+  const [targetFileName, setTargetFileName] = useState<string>('');
+  
   const [tasks, setTasks] = useState<DatabaseTask[]>([]);
   const [selectedTaskIndices, setSelectedTaskIndices] = useState<number[]>([]);
   const [status, setStatus] = useState<'idle' | 'loading' | 'processing' | 'done' | 'error' | 'stopped'>('idle');
@@ -826,12 +1030,20 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
     }
   }, []);
 
-  const loadDatabase = async (buffer: Uint8Array, name: string) => {
-    addLog('DB', `Loading Source database: ${name}`);
+  const loadDatabase = async (buffer: Uint8Array, name: string, isTarget: boolean = false) => {
+    addLog('DB', `Loading ${isTarget ? 'Target' : 'Source'} database: ${name}`);
     
     // @ts-ignore
     const SQL = await window.initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}` });
     const database = new SQL.Database(buffer);
+
+    if (isTarget) {
+        setTargetFileName(name);
+        setTargetDbBuffer(buffer);
+        setTargetDb(database);
+        addLog('DB', `Target database loaded. Matching tables will be overwritten.`);
+        return;
+    }
 
     setFileName(name);
     setStatus('loading');
@@ -872,12 +1084,41 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
     }
   };
 
-  const handleDbUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Expose load method
+  React.useImperativeHandle(ref, () => ({
+    loadFile: (file: StoredFile) => {
+       if (file.content instanceof Uint8Array) {
+         loadDatabase(file.content, file.name);
+       } else {
+         throw new Error("Database file must be binary (Uint8Array)");
+       }
+    }
+  }));
+
+  const handleDbUpload = async (e: React.ChangeEvent<HTMLInputElement>, isTarget: boolean = false) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const buffer = new Uint8Array(await file.arrayBuffer());
-    await loadDatabase(buffer, file.name);
+    await loadDatabase(buffer, file.name, isTarget);
+    
+    // Auto Save Source DB (Only source is auto-saved on import)
+    if (!isTarget) {
+        try {
+            await workspaceService.saveFile({
+            id: Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            content: buffer,
+            type: 'source',
+            mimeType: 'application/x-sqlite3',
+            size: buffer.length,
+            createdAt: new Date(),
+            module: 'database'
+            });
+        } catch(e: any) {
+            addLog('ERR', `Workspace Save Failed (source DB): ${e.message}`);
+        }
+    }
   };
 
   const handleStop = () => {
@@ -886,16 +1127,34 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
     addLog('DB', "Process interruption requested...");
   };
 
-  const downloadDetailedLog = () => {
+  const downloadDetailedLog = async () => {
     if (detailedLogs.current.length === 0) return;
-    const blob = new Blob([detailedLogs.current.join('\n')], { type: 'text/plain' });
+    const content = detailedLogs.current.join('\n');
+    const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Detailed_Database_Report.txt`;
+    const logName = `Detailed_Database_Report_${new Date().getTime()}.txt`;
+    a.download = logName;
     a.click();
     URL.revokeObjectURL(url);
     addLog('DB', 'Detailed report downloaded.');
+
+    // Auto Save Log
+    try {
+        await workspaceService.saveFile({
+          id: Math.random().toString(36).substr(2, 9),
+          name: logName,
+          content: content,
+          type: 'log',
+          mimeType: 'text/plain',
+          size: blob.size,
+          createdAt: new Date(),
+          module: 'database'
+        });
+    } catch(e: any) {
+        addLog('ERR', `Workspace Save Failed (log): ${e.message}`);
+    }
   };
 
   const handleStartProcessing = async () => {
@@ -914,6 +1173,7 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
 
     const gemini = new GeminiService(customApiKey);
     const BATCH_SIZE = 12;
+    const CONCURRENCY = 50;
 
     try {
       const filteredTasks = tasks.filter(t => t.table.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -929,6 +1189,26 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
         const allColsRes = db.exec(`PRAGMA table_info("${task.table}")`);
         const allColNames = allColsRes[0].values.map((v: any) => v[1]);
         const allColStr = allColNames.map((c: string) => `"${c}"`).join(', ');
+
+        // --- TARGET DB HANDLING ---
+        if (targetDb) {
+           const sqlRes = db.exec(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${task.table}'`);
+           if (sqlRes.length > 0 && sqlRes[0].values.length > 0) {
+               const createSql = sqlRes[0].values[0][0] as string;
+               try {
+                  targetDb.run(`DROP TABLE IF EXISTS "${task.table}"`);
+                  targetDb.run(createSql);
+                  addLog('DB', `Recreated table '${task.table}' in target database.`);
+               } catch (e) {
+                  addLog('DB', `Error preparing target table: ${(e as any).message}`);
+                  continue;
+               }
+           } else {
+               addLog('DB', `Could not find schema for table '${task.table}', skipping.`);
+               continue;
+           }
+        }
+        // --------------------------
 
         const isHeaderTable = task.table.toLowerCase().endsWith("_header");
         let whereClause = "";
@@ -956,73 +1236,99 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
 
         if (effectiveRowCount === 0) continue;
 
+        // Prepare Task Units (Offsets) for Parallel Processing
+        const offsets: number[] = [];
         for (let offset = 0; offset < effectiveRowCount; offset += BATCH_SIZE) {
-          if (stopProcessingRef.current) break;
-
-          const query = `SELECT rowid, ${allColStr} FROM "${task.table}" ${whereClause} LIMIT ${BATCH_SIZE} OFFSET ${offset}`;
-          
-          let rowsRes;
-          try {
-             rowsRes = db.exec(query);
-          } catch(e) {
-             addLog('DB', `Error querying batch: ${(e as any).message}`);
-             continue;
-          }
-
-          if (rowsRes.length > 0) {
-            const batchItems = rowsRes[0].values.map((v: any) => {
-              const rowid = v[0] as number;
-              const fullRowData: Record<string, any> = {};
-              allColNames.forEach((col: string, i: number) => fullRowData[col] = v[i + 1]);
-              const translatableData: Record<string, any> = {};
-              task.columns.forEach(col => translatableData[col] = fullRowData[col]);
-              
-              // FIX: Use the discovered sex column name to retrieve value
-              if (task.sexColName && typeof fullRowData[task.sexColName] !== 'undefined') {
-                   translatableData['sex'] = fullRowData[task.sexColName];
-              }
-              
-              // Log Source
-              Object.keys(translatableData).forEach(col => {
-                  if (col !== 'sex') {
-                      detailedLogs.current.push(`[READ] [Row:${rowid}] [Col:${col}] "${String(translatableData[col]).substring(0, 50)}..."`);
-                      // Log Rule
-                      const sexVal = translatableData['sex'];
-                      let genderRule = "Neutral/Masculine (Default)";
-                      if (String(sexVal) === '0') genderRule = "Sex=0 (Male) -> Applying Masculine Tone";
-                      if (String(sexVal) === '1') genderRule = "Sex=1 (Female) -> Applying Feminine Tone";
-                      detailedLogs.current.push(`[RULE] [Row:${rowid}] Target:${effectiveLang} | Rule:${genderRule}`);
-                  }
-              });
-
-              return { rowid, data: translatableData }; 
-            });
-
-            const results = await gemini.translateDatabaseBatch(batchItems, effectiveLang, mode);
-
-            results.forEach((res, idx) => {
-              const updateParts = Object.keys(res.translatedData)
-                .map(col => `"${col}" = ?`)
-                .join(', ');
-              const updateVals = Object.values(res.translatedData);
-              updateVals.push(res.rowid);
-              
-              // Log Write
-              Object.keys(res.translatedData).forEach(col => {
-                 detailedLogs.current.push(`[WRITE] [Row:${res.rowid}] [Col:${col}] "${String(res.translatedData[col]).substring(0, 50)}..."`);
-              });
-
-              db.run(`UPDATE "${task.table}" SET ${updateParts} WHERE rowid = ?`, updateVals);
-            });
-
-            setProgress(p => ({ ...p, rowsProcessed: Math.min(offset + BATCH_SIZE, effectiveRowCount) }));
-          }
+          offsets.push(offset);
         }
+
+        // Execute Parallel Queue
+        await processBatchQueue(
+          offsets,
+          1, // Each item in 'offsets' is already a batch unit
+          CONCURRENCY,
+          async (offsetBatch) => {
+            const offset = offsetBatch[0]; // Batch size 1, so take first element
+            if (stopProcessingRef.current) return;
+
+            const query = `SELECT rowid, ${allColStr} FROM "${task.table}" ${whereClause} LIMIT ${BATCH_SIZE} OFFSET ${offset}`;
+            
+            let rowsRes;
+            try {
+               rowsRes = db.exec(query);
+            } catch(e) {
+               console.error(`DB Query Error`, e);
+               return;
+            }
+
+            if (rowsRes.length > 0) {
+              const batchItems = rowsRes[0].values.map((v: any) => {
+                const rowid = v[0] as number;
+                const fullRowData: Record<string, any> = {};
+                allColNames.forEach((col: string, i: number) => fullRowData[col] = v[i + 1]);
+                const translatableData: Record<string, any> = {};
+                task.columns.forEach(col => translatableData[col] = fullRowData[col]);
+                
+                if (task.sexColName && typeof fullRowData[task.sexColName] !== 'undefined') {
+                     translatableData['sex'] = fullRowData[task.sexColName];
+                }
+                
+                // Logging logic moved outside worker to keep clean or simplified inside
+                return { rowid, data: translatableData }; 
+              });
+
+              // Process with AI
+              const results = await gemini.translateDatabaseBatch(batchItems, effectiveLang, mode);
+
+              // Write Logic (Synchronous SQLite write is safe in JS single thread loop)
+              results.forEach((res, idx) => {
+                const translatedFields = res.translatedData;
+                
+                if (targetDb) {
+                    const originalRow = rowsRes[0].values[idx];
+                    const finalRowData: any = {};
+                    allColNames.forEach((col: string, i: number) => {
+                        finalRowData[col] = originalRow[i+1];
+                    });
+                    Object.keys(translatedFields).forEach(key => {
+                        finalRowData[key] = translatedFields[key];
+                    });
+                    const cols = Object.keys(finalRowData).map(c => `"${c}"`).join(',');
+                    const placeholders = Object.keys(finalRowData).map(() => '?').join(',');
+                    const values = Object.values(finalRowData);
+                    try {
+                      targetDb.run(`INSERT INTO "${task.table}" (${cols}) VALUES (${placeholders})`, values);
+                    } catch(e) {}
+                    
+                } else {
+                    const updateParts = Object.keys(translatedFields)
+                      .map(col => `"${col}" = ?`)
+                      .join(', ');
+                    const updateVals = Object.values(translatedFields);
+                    updateVals.push(res.rowid);
+                    db.run(`UPDATE "${task.table}" SET ${updateParts} WHERE rowid = ?`, updateVals);
+                }
+                
+                // Detailed logging
+                Object.keys(translatedFields).forEach(col => {
+                   detailedLogs.current.push(`[WRITE] [Row:${res.rowid}] [Col:${col}] "${String(translatedFields[col]).substring(0, 50)}..."`);
+                });
+              });
+            }
+          },
+          (processedCount) => {
+             // We track processed rows differently here since batches vary
+             // Simple approximation for progress bar:
+             setProgress(p => ({ ...p, rowsProcessed: Math.min(p.rowsProcessed + BATCH_SIZE, effectiveRowCount) }));
+          },
+          () => stopProcessingRef.current
+        );
+
         addLog('DB', `Finished table: ${task.table}`);
       }
       
       detailedLogs.current.push(`\nEnd Time: ${new Date().toISOString()}`);
-      downloadDetailedLog(); // Auto download log at end
+      downloadDetailedLog();
 
       if (stopProcessingRef.current) {
           setStatus('stopped');
@@ -1030,6 +1336,23 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
       } else {
           setStatus('done');
           addLog('DB', 'Processing complete! Detailed log downloaded.');
+          
+          const dbToExport = targetDb || db;
+          const resultBuffer = dbToExport.export();
+          try {
+            await workspaceService.saveFile({
+                id: Math.random().toString(36).substr(2, 9),
+                name: (targetDb ? targetFileName : fileName).replace('.db', '') + `_${mode}_${effectiveLang}.db`,
+                content: resultBuffer,
+                type: 'destination',
+                mimeType: 'application/x-sqlite3',
+                size: resultBuffer.length,
+                createdAt: new Date(),
+                module: 'database'
+            });
+          } catch(e: any) {
+             addLog('ERR', `Workspace Save Failed (dest DB): ${e.message}`);
+          }
       }
 
     } catch (err: any) {
@@ -1039,13 +1362,14 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
   };
 
   const handleDownload = () => {
-    if (!db) return;
-    const binaryArray = db.export();
+    const dbToExport = targetDb || db;
+    if (!dbToExport) return;
+    const binaryArray = dbToExport.export();
     const blob = new Blob([binaryArray], { type: 'application/x-sqlite3' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileName.replace('.db', '') + `_${mode}_${targetLang}.db`;
+    a.download = (targetDb ? targetFileName : fileName).replace('.db', '') + `_${mode}_${targetLang}.db`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1069,7 +1393,7 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
           </div>
           <div className="w-full">
              <div className="relative">
-                <input type="file" accept=".db,.sqlite" onChange={handleDbUpload} className="hidden" id="db-upload" />
+                <input type="file" accept=".db,.sqlite" onChange={(e) => handleDbUpload(e, false)} className="hidden" id="db-upload" />
                 <label htmlFor="db-upload" className="block border-2 border-dashed border-slate-300 bg-slate-50 rounded-xl p-12 text-center cursor-pointer hover:border-primary-500 hover:bg-white transition-all group h-full flex flex-col items-center justify-center">
                   <Upload className="w-6 h-6 text-slate-400 mx-auto mb-3 group-hover:text-primary-600" />
                   <span className="text-sm font-bold text-slate-500 group-hover:text-slate-900">Upload Source .db</span>
@@ -1119,11 +1443,28 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest w-10">Src</span>
                     <span className="text-[11px] font-bold text-slate-700 truncate max-w-[150px]">{fileName}</span>
                   </div>
+                  {targetDb && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-primary-600 uppercase tracking-widest w-10">Dst</span>
+                        <span className="text-[11px] font-bold text-primary-600 truncate max-w-[150px]">{targetFileName}</span>
+                      </div>
+                  )}
                </div>
+               
+               {/* TARGET DB UPLOAD BUTTON */}
+               {!targetDb && (
+                   <div className="relative">
+                        <input type="file" accept=".db,.sqlite" onChange={(e) => handleDbUpload(e, true)} className="hidden" id="target-db-upload" />
+                        <label htmlFor="target-db-upload" className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-dashed border-slate-300 rounded-lg hover:border-primary-400 hover:bg-white cursor-pointer transition-all">
+                            <PlusCircle className="w-3.5 h-3.5 text-slate-400" />
+                            <span className="text-[10px] font-bold text-slate-500">Add Target DB (Optional)</span>
+                        </label>
+                   </div>
+               )}
              </div>
 
              <div className="flex gap-3 ml-auto">
-               <Button variant="ghost" onClick={() => { setDb(null); setDbBuffer(null); }}>Reset</Button>
+               <Button variant="ghost" onClick={() => { setDb(null); setDbBuffer(null); setTargetDb(null); setTargetDbBuffer(null); }}>Reset</Button>
                {status === 'done' || status === 'stopped' ? (
                  <div className="flex gap-2">
                    <Button variant="primary" onClick={handleDownload}>
@@ -1245,4 +1586,4 @@ function DatabaseModule({ customApiKey, addLog }: { customApiKey: string, addLog
       )}
     </main>
   );
-}
+});

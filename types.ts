@@ -92,9 +92,10 @@ export interface DatabaseTask {
 export interface StoredFile {
   id: string;
   name: string;
-  type: 'source' | 'destination';
+  type: 'source' | 'destination' | 'log';
   content: string | Uint8Array; // String for text, Uint8Array for binary (DB)
   mimeType: string;
   size: number;
   createdAt: Date;
+  module: 'predictions' | 'resources' | 'database';
 }

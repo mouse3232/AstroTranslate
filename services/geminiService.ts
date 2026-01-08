@@ -14,9 +14,9 @@ export interface DBBatchItem {
 
 /**
  * Strict formatting: 
- * 1. Shlokas (lines ending in | or ||) MUST start with a tab.
- * 2. Regular lines with >= 6 words MUST start with a tab.
- * 3. Short lines (< 6 words) must NOT start with a tab.
+ * 1. All lines must start with a Tab (\t).
+ * 2. EXCEPTION: If a line ends with a colon (:), it must NOT start with a tab.
+ * 3. Preserve empty lines.
  */
 function applyAstrologyFormatting(text: string): string {
   if (!text || typeof text !== 'string') return text;
@@ -25,26 +25,53 @@ function applyAstrologyFormatting(text: string): string {
   
   const processedLines = lines.map(line => {
     const trimmed = line.trim();
-    if (!trimmed) return ""; // Return empty string for blank lines to avoid whitespace buildup
+    if (!trimmed) return ""; // Return empty string for blank lines
 
-    // Rule 2: Shloka detection.
-    const isShloka = trimmed.endsWith('|') || trimmed.endsWith('||') || trimmed.endsWith('॥');
-
-    if (isShloka) {
-      return `\t${trimmed}`;
-    }
-
-    // Rule 1: Word count check.
-    const wordCount = trimmed.split(/\s+/).length;
-    if (wordCount < 6) {
+    // Rule 2: Exception for lines ending in colon
+    if (trimmed.endsWith(':')) {
       return trimmed;
     }
 
-    // Default: Regular text with >= 6 words gets indented.
+    // Rule 1: Default indent with tab
     return `\t${trimmed}`; 
   });
 
   return processedLines.join('\n');
+}
+
+/**
+ * Helper to retry async functions with exponential backoff.
+ * Essential for high concurrency batching.
+ */
+async function retry<T>(
+  fn: () => Promise<T>, 
+  retries = 5, 
+  baseDelay = 2000,
+  factor = 2
+): Promise<T> {
+  let lastError: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      // Retry on Rate Limit (429) or Server Error (503/500)
+      const isRetryable = 
+        error.message?.includes('429') || 
+        error.message?.includes('503') || 
+        error.status === 429 ||
+        error.status === 503;
+
+      if (attempt < retries && isRetryable) {
+        const delay = baseDelay * Math.pow(factor, attempt) + (Math.random() * 1000); // Add jitter
+        console.warn(`[Gemini] Rate limited. Retrying in ${Math.round(delay)}ms... (Attempt ${attempt + 1}/${retries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
 }
 
 export class GeminiService {
@@ -64,7 +91,7 @@ export class GeminiService {
     }
     if (!key) {
       try {
-        if (typeof process !== 'undefined' && process.env) {
+        if (typeof process.env !== 'undefined' && process.env) {
           key = process.env.API_KEY;
         }
       } catch (e) {}
@@ -162,7 +189,7 @@ export class GeminiService {
       sex: p.sex
     }));
 
-    try {
+    return retry(async () => {
       const response = await this.ai.models.generateContent({
         model: modelName,
         contents: [{ role: 'user', parts: [{ text: prompt }, { text: JSON.stringify(payload) }] }],
@@ -173,15 +200,10 @@ export class GeminiService {
       const results = parsed.results || [];
 
       return preProcessed.map((item, idx) => ({
-        text: item.leading + (results[idx]?.processedText ?? item.content)
+        // Apply strict formatting instead of preserving original leading whitespace
+        text: applyAstrologyFormatting(results[idx]?.processedText ?? item.content)
       }));
-    } catch (error: any) {
-      console.error("Gemini Error:", error);
-      if (error.message?.includes("401") || error.message?.includes("API key")) {
-         throw new Error("Invalid or Missing API Key.");
-      }
-      throw error;
-    }
+    });
   }
 
   /**
@@ -207,7 +229,7 @@ export class GeminiService {
       6. Return ONLY raw code, no markdown.
     `;
 
-    try {
+    return retry(async () => {
       const response = await this.ai.models.generateContent({
         model: modelName,
         contents: `Translate this resource code:\n\n${fileContent}`,
@@ -220,13 +242,12 @@ export class GeminiService {
       let cleanText = (response.text || "").trim();
       cleanText = cleanText.replace(/^```[a-z]*\n/, '').replace(/\n```$/, '');
       return cleanText;
-    } catch (error: any) {
-      throw new Error(error.message || "Failed to translate resource file.");
-    }
+    });
   }
 
   /**
    * APP 2.5: DotNet/Text Resource Localizer
+   * PARALLELIZED VERSION
    */
   async translateDotNetResource(
     content: string,
@@ -237,10 +258,17 @@ export class GeminiService {
     this.validateKey();
     const lines = content.split(/\r?\n/);
     const totalLines = lines.length;
-    const calcBatch = Math.ceil(totalLines * 0.25);
-    const BATCH_SIZE = Math.max(10, Math.min(calcBatch, 10000)); 
-
-    const processedLines: string[] = [];
+    
+    // Create Batches
+    const BATCH_SIZE = 30;
+    const batches: { lines: string[], index: number }[] = [];
+    
+    for (let i = 0; i < totalLines; i += BATCH_SIZE) {
+        batches.push({
+            lines: lines.slice(i, i + BATCH_SIZE),
+            index: i
+        });
+    }
 
     const systemInstruction = `
       You are a specialized translator for .NET/Text resource files. 
@@ -254,69 +282,95 @@ export class GeminiService {
       6. Return ONLY the processed text block.
     `;
 
-    for (let i = 0; i < totalLines; i += BATCH_SIZE) {
-      if (checkStop && checkStop()) {
-         throw new Error("Processing stopped by user.");
-      }
-      
-      const batch = lines.slice(i, i + BATCH_SIZE);
-      const batchText = batch.join('\n');
-      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(totalLines / BATCH_SIZE);
+    const resultMap = new Map<number, string[]>();
+    let completedLines = 0;
 
-      onProgress(i, totalLines, `Sending Batch ${batchNum}/${totalBatches} (${batch.length} lines)...`);
+    // Concurrency Helper
+    const CONCURRENCY = 20;
+    const queue = [...batches];
+    
+    const worker = async (): Promise<void> => {
+        while (queue.length > 0) {
+            if (checkStop && checkStop()) return;
+            const batch = queue.shift();
+            if (!batch) break;
 
-      if (!batchText.trim()) {
-        processedLines.push(...batch);
-        continue;
-      }
+            const batchText = batch.lines.join('\n');
+            if (!batchText.trim()) {
+                resultMap.set(batch.index, batch.lines);
+                completedLines += batch.lines.length;
+                onProgress(completedLines, totalLines, `Skipped empty batch.`);
+                continue;
+            }
 
-      try {
-        const response = await this.ai.models.generateContent({
-          model: 'gemini-3-pro-preview',
-          contents: `Process lines ${i + 1} to ${Math.min(i + BATCH_SIZE, totalLines)}:\n\n${batchText}`,
-          config: { systemInstruction: systemInstruction }
-        });
+            try {
+                // Wrap in retry
+                const processedText = await retry(async () => {
+                    const response = await this.ai.models.generateContent({
+                        model: 'gemini-3-pro-preview',
+                        contents: `Process lines:\n\n${batchText}`,
+                        config: { systemInstruction: systemInstruction }
+                    });
+                    return response.text || "";
+                });
 
-        let resultText = response.text || "";
-        resultText = resultText.replace(/^```[a-z]*\n/, '').replace(/\n```$/, '');
-        const resultLines = resultText.split(/\r?\n/);
-        
-        // Reconstruction logic (kept same as before for stability)
-        const reconstructedBatch: string[] = [];
-        for (let j = 0; j < batch.length; j++) {
-           const originalLine = batch[j];
-           const translatedLine = resultLines[j];
-           const trimmedOriginal = originalLine.trim();
-           
-           if (!trimmedOriginal || trimmedOriginal.startsWith(';')) {
-             reconstructedBatch.push(originalLine); 
-             continue;
-           }
-           const equalsIndex = originalLine.indexOf('=');
-           if (equalsIndex !== -1) {
-              const key = originalLine.substring(0, equalsIndex + 1); 
-              if (translatedLine && translatedLine.includes('=')) {
-                  const transEqualsIndex = translatedLine.indexOf('=');
-                  const transValue = translatedLine.substring(transEqualsIndex + 1);
-                  reconstructedBatch.push(key + transValue);
-              } else if (translatedLine) {
-                  reconstructedBatch.push(key + translatedLine);
-              } else {
-                  reconstructedBatch.push(originalLine);
-              }
-           } else {
-              reconstructedBatch.push(translatedLine || originalLine);
-           }
+                let resultText = processedText.replace(/^```[a-z]*\n/, '').replace(/\n```$/, '');
+                const resultLines = resultText.split(/\r?\n/);
+                
+                // Reconstruction
+                const reconstructedBatch: string[] = [];
+                for (let j = 0; j < batch.lines.length; j++) {
+                    const originalLine = batch.lines[j];
+                    const translatedLine = resultLines[j];
+                    const trimmedOriginal = originalLine.trim();
+                    
+                    if (!trimmedOriginal || trimmedOriginal.startsWith(';')) {
+                        reconstructedBatch.push(originalLine); 
+                        continue;
+                    }
+                    const equalsIndex = originalLine.indexOf('=');
+                    if (equalsIndex !== -1) {
+                        const key = originalLine.substring(0, equalsIndex + 1); 
+                        if (translatedLine && translatedLine.includes('=')) {
+                            const transEqualsIndex = translatedLine.indexOf('=');
+                            const transValue = translatedLine.substring(transEqualsIndex + 1);
+                            reconstructedBatch.push(key + transValue);
+                        } else if (translatedLine) {
+                            reconstructedBatch.push(key + translatedLine);
+                        } else {
+                            reconstructedBatch.push(originalLine);
+                        }
+                    } else {
+                        reconstructedBatch.push(translatedLine || originalLine);
+                    }
+                }
+                
+                resultMap.set(batch.index, reconstructedBatch);
+                completedLines += batch.lines.length;
+                onProgress(completedLines, totalLines, `Processed batch (Parallel)`);
+            } catch (err: any) {
+                console.error(`Batch failed:`, err);
+                resultMap.set(batch.index, batch.lines); // Fallback to original
+            }
         }
-        
-        processedLines.push(...reconstructedBatch);
-      } catch (err: any) {
-        throw new Error(`Batch ${batchNum} failed: ${err.message}`);
-      }
+    };
+
+    // Start Workers
+    const workers = Array(Math.min(CONCURRENCY, batches.length)).fill(null).map(() => worker());
+    await Promise.all(workers);
+
+    if (checkStop && checkStop()) {
+        throw new Error("Processing stopped by user.");
     }
 
-    return processedLines.join('\n');
+    // Assemble final output
+    const finalLines: string[] = [];
+    batches.sort((a, b) => a.index - b.index).forEach(b => {
+        const res = resultMap.get(b.index) || b.lines;
+        finalLines.push(...res);
+    });
+
+    return finalLines.join('\n');
   }
 
   /**
@@ -394,7 +448,7 @@ export class GeminiService {
       4. Return ONLY JSON.
     `;
 
-    try {
+    return retry(async () => {
       const response = await this.ai.models.generateContent({
         model: modelName,
         contents: JSON.stringify(payload),
@@ -430,10 +484,6 @@ export class GeminiService {
 
         return { rowid: item.rowid, translatedData: formattedData };
       });
-
-    } catch (error: any) {
-      console.warn(`Gemini Batch Failed:`, error);
-      throw error;
-    }
+    });
   }
 }
