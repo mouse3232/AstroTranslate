@@ -1,48 +1,50 @@
-{
-  "name": "ai-translation-and-correction",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
+// launcher.js - CommonJS entry for pkg EXE
+const { spawn } = require("child_process");
+const fs = require("fs");
+const path = require("path");
 
-  "bin": "launcher.js",
+// Directory where the EXE lives
+const EXE_DIR = path.dirname(process.execPath);
 
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-
-    "build:frontend": "vite build",
-    "build:exe": "pkg ."
-  },
-
-  "dependencies": {
-    "@google/genai": "^1.34.0",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.562.0",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "tailwind-merge": "^3.4.0"
-  },
-
-  "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0",
-    "pkg": "^5.8.1"
-  },
-
-  "pkg": {
-    "assets": [
-      "dist/**/*",
-      "server.js",
-      "services/**/*",
-      "utils/**/*",
-      "metadata.json"
-    ],
-    "targets": [
-      "node18-win-x64"
-    ],
-    "outputPath": "release"
-  }
+// Workspace folder for storing server files
+const WORKSPACE_DIR = path.join(EXE_DIR, "workspace");
+if (!fs.existsSync(WORKSPACE_DIR)) {
+  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+  console.log("✅ Workspace created at:", WORKSPACE_DIR);
+} else {
+  console.log("ℹ️ Workspace exists at:", WORKSPACE_DIR);
 }
+
+// Path to project files inside EXE
+const APP_DIR = __dirname;
+
+// Helper to start a node process
+function start(script, args = []) {
+  const child = spawn(
+    process.execPath,
+    [path.join(APP_DIR, script), ...args],
+    {
+      cwd: WORKSPACE_DIR,
+      stdio: "inherit",
+      env: { ...process.env, NODE_ENV: "production" },
+    }
+  );
+
+  child.on("exit", (code) => {
+    console.log(`❌ ${script} exited with code ${code}`);
+  });
+
+  return child;
+}
+
+console.log("🚀 Starting servers...");
+
+// Start backend server on 3000
+start("server.js");
+
+// Start model/dev server on 3001 (ensure cli.js exists)
+start("cli.js");
+
+console.log("✅ All services started");
+console.log("🌐 http://localhost:3000");
+console.log("🤖 http://localhost:3001");
