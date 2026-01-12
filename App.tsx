@@ -63,7 +63,14 @@ export default function App() {
   const [activeModule, setActiveModule] = useState<AppModule>('home');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+  const [apiKey, setApiKey] = useState(() => {
+    try {
+      return localStorage.getItem('gemini_api_key') || '';
+    } catch (error) {
+      console.warn('Could not read API key from localStorage:', error);
+      return '';
+    }
+  });
   const [logs, setLogs] = useState<LogEntry[]>([]);
   
   const predictionsRef = useRef<any>(null);
