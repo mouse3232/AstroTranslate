@@ -3,6 +3,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { 
   Sparkles, FileText, Settings2, Code, Database, AlignLeft, HardDrive, Terminal, DownloadCloud, Home,
 } from 'lucide-react';
+import toast, { Toaster } from 'react-hot-toast';
 import { StoredFile } from './types';
 import { WorkspaceDrawer } from './components/WorkspaceDrawer';
 import { Button } from './components/Button';
@@ -84,7 +85,7 @@ export default function App() {
 
   const handleWorkspaceLoad = (file: StoredFile) => {
     if (file.module !== activeModule) {
-      alert(`Cannot load ${file.module} file into ${activeModule} module.`);
+      toast.error(`Cannot load ${file.module} file into ${activeModule} module.`);
       return;
     }
     const target = activeModule === 'predictions' ? predictionsRef :
@@ -95,6 +96,7 @@ export default function App() {
     target.current?.loadFile(file);
     setIsWorkspaceOpen(false);
     addLog('SYS', `Loaded file: ${file.name}`);
+    toast.success(`Loaded file: ${file.name}`);
   };
 
   const NavItem = ({ id, label, icon }: any) => (
@@ -108,6 +110,32 @@ export default function App() {
 
   return (
     <div className="h-screen bg-slate-50 text-slate-900 flex flex-col font-sans overflow-hidden">
+      <Toaster position="bottom-right" toastOptions={{
+        className: 'text-xs font-sans',
+        duration: 4000,
+        success: {
+          style: {
+            background: '#F0FFF4', // green-50
+            color: '#22543D', // green-900
+            border: '1px solid #9AE6B4' // green-300
+          },
+          iconTheme: {
+            primary: '#38A169', // green-600
+            secondary: 'white',
+          },
+        },
+        error: {
+           style: {
+            background: '#FFF5F5', // red-50
+            color: '#742A2A', // red-900
+            border: '1px solid #FEB2B2' // red-300
+          },
+           iconTheme: {
+            primary: '#C53030', // red-600
+            secondary: 'white',
+          },
+        }
+      }} />
       <header className="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shrink-0 z-50 shadow-sm">
         <div className="flex items-center gap-4 cursor-pointer" onClick={() => setActiveModule('home')}>
           <div className="bg-primary-600 p-2 rounded-lg shadow-md"><Sparkles className="w-5 h-5 text-white" /></div>
@@ -142,7 +170,16 @@ export default function App() {
               <h2 className="text-lg font-bold mb-4">Settings</h2>
               <input type="text" className="w-full border p-2 rounded mb-4 text-sm font-mono" placeholder="Gemini API Key" value={apiKey} onChange={e => setApiKey(e.target.value)} />
               <div className="flex justify-end gap-2">
-                 <Button onClick={() => { localStorage.setItem('gemini_api_key', apiKey); setIsSettingsOpen(false); }}>Save</Button>
+                 <Button onClick={() => {
+                   try {
+                     localStorage.setItem('gemini_api_key', apiKey);
+                     toast.success('API Key saved successfully!');
+                     setIsSettingsOpen(false);
+                   } catch (error) {
+                      toast.error('Could not save API Key.');
+                      console.error('Failed to save API Key to localStorage:', error);
+                   }
+                 }}>Save</Button>
                  <Button variant="secondary" onClick={() => setIsSettingsOpen(false)}>Cancel</Button>
               </div>
            </div>

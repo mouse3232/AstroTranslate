@@ -99,8 +99,12 @@ const server = http.createServer((req, res) => {
           .filter(file => file.endsWith('.json'))
           .map(file => {
             try {
-              const content = fs.readFileSync(path.join(userDir, file), 'utf8');
-              return JSON.parse(content);
+              const filePath = path.join(userDir, file);
+              const stats = fs.statSync(filePath);
+              const content = fs.readFileSync(filePath, 'utf8');
+              const data = JSON.parse(content);
+              data.modifiedAt = stats.mtime; // Add modification time
+              return data;
             } catch (readErr) {
               console.error(`Skipping corrupt file ${file}:`, readErr);
               return null;
