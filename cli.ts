@@ -112,7 +112,7 @@ async function main() {
             });
 
             const totalItems = processingItems.length;
-            const BATCH_SIZE = 15;
+            const BATCH_SIZE = 3; // Reduced batch size
             let sentCount = 0;
 
             if (totalItems > 0) {
@@ -137,6 +137,8 @@ async function main() {
                   });
                   
                   sentCount += batch.length;
+                  // Add delay for CLI as well
+                  await new Promise(r => setTimeout(r, 5000));
                 }
             }
             (process as any).stdout.write(`\r   > Progress: ${totalItems}/${totalItems} blocks (100%)\n`);

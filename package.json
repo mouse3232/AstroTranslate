@@ -1,15 +1,12 @@
 {
-  "name": "ai-translation-and-correction",
-  "version": "0.0.0",
+  "name": "ai-translation-&-correction",
   "private": true,
+  "version": "0.0.0",
   "type": "module",
-  "bin": "launcher.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "build:frontend": "vite build",
-    "build:exe": "pkg ."
+    "preview": "vite preview"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -25,19 +22,6 @@
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0",
-    "pkg": "^5.8.1"
-  },
-  "pkg": {
-    "assets": [
-      "dist/**/*",
-      "server.js",
-      "cli.js",
-      "services/**/*",
-      "utils/**/*",
-      "metadata.json"
-    ],
-    "targets": ["node18-win-x64"],
-    "outputPath": "release"
+    "vite": "^6.2.0"
   }
 }

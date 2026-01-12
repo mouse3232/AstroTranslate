@@ -45,8 +45,8 @@ function applyAstrologyFormatting(text: string): string {
  */
 async function retry<T>(
   fn: () => Promise<T>, 
-  retries = 5, 
-  baseDelay = 2000,
+  retries = 10, // Increased default to 10 for ultra-safety
+  baseDelay = 10000, 
   factor = 2
 ): Promise<T> {
   let lastError: any;
@@ -55,16 +55,24 @@ async function retry<T>(
       return await fn();
     } catch (error: any) {
       lastError = error;
+      const msg = (error.message || '').toLowerCase();
       // Retry on Rate Limit (429) or Server Error (503/500)
       const isRetryable = 
-        error.message?.includes('429') || 
-        error.message?.includes('503') || 
+        msg.includes('429') || 
+        msg.includes('503') || 
         error.status === 429 ||
         error.status === 503;
 
       if (attempt < retries && isRetryable) {
-        const delay = baseDelay * Math.pow(factor, attempt) + (Math.random() * 1000); // Add jitter
-        console.warn(`[Gemini] Rate limited. Retrying in ${Math.round(delay)}ms... (Attempt ${attempt + 1}/${retries})`);
+        // AGGRESSIVE COOL DOWN for 429
+        let delay = baseDelay * Math.pow(factor, attempt) + (Math.random() * 1000);
+        if (msg.includes('429') || error.status === 429) {
+            delay = 60000; // Fixed 60s for rate limits
+            console.warn(`[Gemini] Rate limited (429). Cooling down for 60s... (Attempt ${attempt + 1}/${retries})`);
+        } else {
+            console.warn(`[Gemini] Server error. Retrying in ${Math.round(delay)}ms... (Attempt ${attempt + 1}/${retries})`);
+        }
+        
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -177,10 +185,18 @@ export class GeminiService {
          - NEVER return the same neutral term for both sexes if distinct terms exist.
       
       GENERAL RULES:
-      1. NO EXPLANATION. NO NOTES. Output ONLY the processed text in the "results" array.
-      2. PRESERVE variables like <Var>, {0}, %s EXACTLY.
-      3. MANTRA HANDLING:
+      1. PRESERVE variables like <Var>, {0}, %s EXACTLY.
+      2. MANTRA HANDLING:
          ${keepSanskrit ? "- Keep Mantras/Shlokas in ORIGINAL Sanskrit (Devanagari). Do not translate." : transliterateShlokas ? "- Transliterate Mantras into phonetic English." : "- Translate Mantras normally."}
+
+      ABSOLUTE RULES (NO EXCEPTIONS):
+      1. ZERO ORIGINAL TEXT: The output must contain zero original-language text from the input.
+      2. NO COPYING: No word, phrase, sentence, or character sequence may appear in the output exactly as it appears in the input (unless it is a proper noun or variable).
+      3. FULL PROCESSING: The entire input must be fully processed. 
+      4. LENGTH CHECK: Output length must be ≥ 99% of the input word count.
+      5. NO SUMMARIES: Do not summarize. Do not skip lines. Do not truncate.
+      6. NO EXPLANATIONS: Return only the processed text strings in the JSON structure.
+      7. FAILURE HANDLING: If any part cannot be processed, return an empty string for that specific item (do not return partial text).
     `;
 
     // Construct the payload with explicit sex per item
@@ -220,13 +236,19 @@ export class GeminiService {
     const systemInstruction = `
       You are a Senior Localization Engineer. 
       Translate a JavaScript/JSON resource file from ${sourceLang} to ${targetLang}.
-      RULES:
+      
+      ABSOLUTE QUALITY RULES:
       1. Translate ALL string literals inside quotes and items inside arrays.
       2. Do NOT translate keys (identifiers before colon).
       3. Do NOT translate variable names or code keywords.
       4. Presere all syntax, indentation, and structure EXACTLY.
       5. Astrology context: ensure terms like 'Rahu' are correct for the target language.
       6. Return ONLY raw code, no markdown.
+
+      STRICT PROCESSING GATES:
+      - The output (string values) must contain zero original-language text.
+      - Output length of values must be ≥ 99% of input (No summaries).
+      - No skipped lines. No copied phrases. No explanations.
     `;
 
     return retry(async () => {
@@ -247,7 +269,7 @@ export class GeminiService {
 
   /**
    * APP 2.5: DotNet/Text Resource Localizer
-   * PARALLELIZED VERSION
+   * SEQUENTIAL VERSION
    */
   async translateDotNetResource(
     content: string,
@@ -260,7 +282,7 @@ export class GeminiService {
     const totalLines = lines.length;
     
     // Create Batches
-    const BATCH_SIZE = 30;
+    const BATCH_SIZE = 5; // Reduced from 10 to 5 for safety
     const batches: { lines: string[], index: number }[] = [];
     
     for (let i = 0; i < totalLines; i += BATCH_SIZE) {
@@ -273,6 +295,7 @@ export class GeminiService {
     const systemInstruction = `
       You are a specialized translator for .NET/Text resource files. 
       Input format is "Key=Value" pairs. Target: ${targetLang}.
+      
       STRICT RULES:
       1. OUTPUT FORMAT: Return EXACTLY the same number of lines. Preserve empty lines.
       2. COMMENT LINES: Keep lines starting with ';' EXACTLY as is.
@@ -280,87 +303,86 @@ export class GeminiService {
       4. DELIMITERS: Split value by "*#*", translate segments, rejoin with "*#*".
       5. PLACEHOLDERS: Preserve "%$&Name(0)", "{0}", "<Var>".
       6. Return ONLY the processed text block.
+
+      ABSOLUTE PROCESSING GATES (NO EXCEPTIONS):
+      - The 'Value' part must contain zero original-language text.
+      - No word/phrase in 'Value' may appear exactly as input.
+      - Output length must be ≥ 99% of input. No Summaries.
+      - No skipped lines. No copied phrases. No explanations.
     `;
 
     const resultMap = new Map<number, string[]>();
     let completedLines = 0;
 
-    // Concurrency Helper
-    const CONCURRENCY = 20;
-    const queue = [...batches];
-    
-    const worker = async (): Promise<void> => {
-        while (queue.length > 0) {
-            if (checkStop && checkStop()) return;
-            const batch = queue.shift();
-            if (!batch) break;
-
-            const batchText = batch.lines.join('\n');
-            if (!batchText.trim()) {
-                resultMap.set(batch.index, batch.lines);
-                completedLines += batch.lines.length;
-                onProgress(completedLines, totalLines, `Skipped empty batch.`);
-                continue;
-            }
-
-            try {
-                // Wrap in retry
-                const processedText = await retry(async () => {
-                    const response = await this.ai.models.generateContent({
-                        model: 'gemini-3-pro-preview',
-                        contents: `Process lines:\n\n${batchText}`,
-                        config: { systemInstruction: systemInstruction }
-                    });
-                    return response.text || "";
-                });
-
-                let resultText = processedText.replace(/^```[a-z]*\n/, '').replace(/\n```$/, '');
-                const resultLines = resultText.split(/\r?\n/);
-                
-                // Reconstruction
-                const reconstructedBatch: string[] = [];
-                for (let j = 0; j < batch.lines.length; j++) {
-                    const originalLine = batch.lines[j];
-                    const translatedLine = resultLines[j];
-                    const trimmedOriginal = originalLine.trim();
-                    
-                    if (!trimmedOriginal || trimmedOriginal.startsWith(';')) {
-                        reconstructedBatch.push(originalLine); 
-                        continue;
-                    }
-                    const equalsIndex = originalLine.indexOf('=');
-                    if (equalsIndex !== -1) {
-                        const key = originalLine.substring(0, equalsIndex + 1); 
-                        if (translatedLine && translatedLine.includes('=')) {
-                            const transEqualsIndex = translatedLine.indexOf('=');
-                            const transValue = translatedLine.substring(transEqualsIndex + 1);
-                            reconstructedBatch.push(key + transValue);
-                        } else if (translatedLine) {
-                            reconstructedBatch.push(key + translatedLine);
-                        } else {
-                            reconstructedBatch.push(originalLine);
-                        }
-                    } else {
-                        reconstructedBatch.push(translatedLine || originalLine);
-                    }
-                }
-                
-                resultMap.set(batch.index, reconstructedBatch);
-                completedLines += batch.lines.length;
-                onProgress(completedLines, totalLines, `Processed batch (Parallel)`);
-            } catch (err: any) {
-                console.error(`Batch failed:`, err);
-                resultMap.set(batch.index, batch.lines); // Fallback to original
-            }
+    // Process Batches Sequentially
+    for (const batch of batches) {
+        if (checkStop && checkStop()) {
+            throw new Error("Processing stopped by user.");
         }
-    };
 
-    // Start Workers
-    const workers = Array(Math.min(CONCURRENCY, batches.length)).fill(null).map(() => worker());
-    await Promise.all(workers);
+        const batchText = batch.lines.join('\n');
+        
+        // Skip empty batches
+        if (!batchText.trim()) {
+             resultMap.set(batch.index, batch.lines);
+             completedLines += batch.lines.length;
+             onProgress(completedLines, totalLines, `Skipped empty batch.`);
+             continue;
+        }
 
-    if (checkStop && checkStop()) {
-        throw new Error("Processing stopped by user.");
+        try {
+            // Processing
+            const processedText = await retry(async () => {
+                const response = await this.ai.models.generateContent({
+                    model: 'gemini-3-pro-preview',
+                    contents: `Process lines:\n\n${batchText}`,
+                    config: { systemInstruction: systemInstruction }
+                });
+                return response.text || "";
+            });
+
+            let resultText = processedText.replace(/^```[a-z]*\n/, '').replace(/\n```$/, '');
+            const resultLines = resultText.split(/\r?\n/);
+            
+            // Reconstruction Logic to handle minor AI line count mismatch or key corruption
+            const reconstructedBatch: string[] = [];
+            for (let j = 0; j < batch.lines.length; j++) {
+                const originalLine = batch.lines[j];
+                const translatedLine = resultLines[j];
+                const trimmedOriginal = originalLine.trim();
+                
+                if (!trimmedOriginal || trimmedOriginal.startsWith(';')) {
+                    reconstructedBatch.push(originalLine); 
+                    continue;
+                }
+                const equalsIndex = originalLine.indexOf('=');
+                if (equalsIndex !== -1) {
+                    const key = originalLine.substring(0, equalsIndex + 1); 
+                    if (translatedLine && translatedLine.includes('=')) {
+                        const transEqualsIndex = translatedLine.indexOf('=');
+                        const transValue = translatedLine.substring(transEqualsIndex + 1);
+                        reconstructedBatch.push(key + transValue);
+                    } else if (translatedLine) {
+                        reconstructedBatch.push(key + translatedLine);
+                    } else {
+                        reconstructedBatch.push(originalLine);
+                    }
+                } else {
+                    reconstructedBatch.push(translatedLine || originalLine);
+                }
+            }
+            
+            resultMap.set(batch.index, reconstructedBatch);
+            completedLines += batch.lines.length;
+            onProgress(completedLines, totalLines, `Processed lines ${completedLines}/${totalLines}`);
+            
+            // Safety Delay
+            await new Promise(r => setTimeout(r, 5000)); 
+
+        } catch (err: any) {
+            console.error(`Batch failed:`, err);
+            resultMap.set(batch.index, batch.lines); // Fallback to original
+        }
     }
 
     // Assemble final output
@@ -404,6 +426,16 @@ export class GeminiService {
       }
     };
 
+    const rules = `
+      ABSOLUTE RULES (NO EXCEPTIONS):
+      1. ZERO ORIGINAL TEXT: The output must contain zero original-language text from the input (unless it is a proper noun/variable).
+      2. NO COPYING: No word, phrase, sentence, or character sequence may appear exactly as it appears in the input.
+      3. FULL PROCESSING: The entire input must be fully processed.
+      4. LENGTH CHECK: Output length must be ≥ 99% of the input word count.
+      5. NO SUMMARIES: Do not summarize. Do not skip lines.
+      6. NO EXPLANATIONS: Return only JSON.
+    `;
+
     const systemPrompt = mode === 'translate' ? `
       You are an expert translator for Vedic Astrology software.
       TASK: Translate JSON values to ${targetLanguage}.
@@ -427,6 +459,8 @@ export class GeminiService {
       2. "The native" -> "You".
       3. Decode KrutiDev/Devlys to Unicode.
       4. Return ONLY JSON.
+
+      ${rules}
     ` : `
       You are an expert linguistic editor.
       TASK: Rewrite JSON data in Unicode, strictly preserving meaning.
@@ -446,6 +480,8 @@ export class GeminiService {
       2. "The native" -> "You".
       3. Convert KrutiDev/Devlys to Unicode.
       4. Return ONLY JSON.
+
+      ${rules}
     `;
 
     return retry(async () => {

@@ -1,3 +1,4 @@
+
 import { FileStructure, ParsedBlock } from '../types';
 
 /**
@@ -80,4 +81,24 @@ export const updateHeaderSex = (header: string, sex: 0 | 1): string => {
   }
   // Append if missing.
   return `${trimmedHeader},Sex=${sex}`;
+};
+
+/**
+ * Identifies action columns based on table name rules.
+ */
+export const identifyTargetColumns = (tableName: string, allColumns: string[]): string[] => {
+  const lowerName = tableName.toLowerCase();
+  let targets: string[] = [];
+
+  if (lowerName.endsWith('_header')) {
+     // Rule: For tables ending with name _header: Text, Text1, Text2 and notes1, notes2
+     targets = ['text', 'text1', 'text2', 'notes1', 'notes2'];
+  } else {
+     // Rule: Text, Prediction, Question, Category, Header, Text1...Text8
+     targets = ['text', 'prediction', 'question', 'category', 'header'];
+     for(let i=1; i<=8; i++) targets.push(`text${i}`);
+  }
+  
+  // Filter allColumns to only return those that match targets (case-insensitive)
+  return allColumns.filter(c => targets.includes(c.toLowerCase()));
 };
