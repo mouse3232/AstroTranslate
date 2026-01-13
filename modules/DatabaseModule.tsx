@@ -236,10 +236,13 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                 continue;
             }
 
-            const batchItems = tableRows.map((d: any) => ({
-                rowid: d._row_id_,
-                data: Object.fromEntries(targetColumns.map(col => [col, d[col]]))
-            }));
+            const batchItems = tableRows.map((d: any) => {
+                const data: any = Object.fromEntries(targetColumns.map(col => [col, d[col]]));
+                if (d.sex !== undefined) {
+                    data.sex = d.sex;
+                }
+                return { rowid: d._row_id_, data };
+            });
 
             addLog('DB', `Processing ${tableName}: ${batchItems.length} rows, Cols: [${targetColumns.join(', ')}]`);
 
