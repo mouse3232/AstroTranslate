@@ -220,12 +220,11 @@ const server = http.createServer((req, res) => {
   }
 
   // Static File Serving
-  // FIX: Use urlPath (without query params) to find files on disk
-  let filePath = '.' + urlPath;
-  if (filePath === './') {
-    filePath = './index.html';
-  } else if (filePath.endsWith('/')) {
-    filePath += 'index.html';
+  const staticPath = path.join(__dirname, 'dist');
+
+  let filePath = path.join(staticPath, urlPath);
+  if (urlPath === '/') {
+    filePath = path.join(staticPath, 'index.html');
   }
 
   const extname = String(path.extname(filePath)).toLowerCase();
@@ -261,4 +260,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running at http://localhost:${PORT}/`);
   console.log(`Workspace Storage: ${WORKSPACE_DIR}`);
+  if (process.send) {
+    process.send('server-ready');
+  }
 });
