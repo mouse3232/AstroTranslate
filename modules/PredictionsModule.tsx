@@ -2,9 +2,9 @@
 import React, { useState, useRef, useImperativeHandle } from 'react';
 import { Languages, RefreshCw, Split, Wand2, Scroll, Zap, FileText, Plus, ClipboardPaste } from 'lucide-react';
 import { TargetLanguage, ProcessingMode, ProcessingItem, StoredFile, FileData } from '../types';
-import { GeminiService } from '../services/geminiService';
+import { GeminiService } from '../services/geminiService.ts';
 import { SmartBatchService } from '../services/smartBatchService';
-import { parseInputFile, identifyTranslatableLines, getGenderFromHeader, updateHeaderSex } from '../utils/parser';
+import { parseInputFile, identifyTranslatableLines, getGenderFromHeader, updateHeaderSex } from '../utils/parser.ts';
 import { Button } from '../components/Button';
 
 interface Props {

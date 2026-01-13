@@ -5,7 +5,6 @@
   "identifier": "com.ai-translation.app",
   "build": {
     "frontendDist": "../dist",
-    "sidecar": ["server.cjs"],
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
@@ -33,6 +32,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/server"
     ]
   }
 }

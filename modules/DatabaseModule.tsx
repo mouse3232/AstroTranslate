@@ -3,12 +3,12 @@ import React, { useState, useRef, useImperativeHandle } from 'react';
 import toast from 'react-hot-toast';
 import { Database, FileUp, Save, Table as TableIcon, ArrowRight, Upload } from 'lucide-react';
 import { TargetLanguage, StoredFile, FileData } from '../types';
-import { GeminiService, DBBatchItem } from '../services/geminiService';
+import { GeminiService, DBBatchItem } from '../services/geminiService.ts';
 import { workspaceService } from '../services/workspaceService';
 import { Button } from '../components/Button';
 import { TableSelector } from '../components/TableSelector';
-import { LANGUAGES } from '../constants';
-import { identifyTargetColumns } from '../utils/parser';
+import { LANGUAGES } from '../constants.ts';
+import { identifyTargetColumns } from '../utils/parser.ts';
 
 interface Props {
   customApiKey: string;
