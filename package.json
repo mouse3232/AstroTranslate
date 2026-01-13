@@ -3,26 +3,12 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "electron.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "dev:electron": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron .\"",
-    "build:electron": "npm run build && electron-builder"
-  },
-  "build": {
-    "appId": "com.example.ai-translation-correction",
-    "productName": "AI Translation & Correction",
-    "files": [
-      "dist/**/*",
-      "electron.js",
-      "server.js",
-      "package.json"
-    ],
-    "win": {
-      "target": "portable"
-    }
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@google/genai": "^1.34.0",
@@ -34,14 +20,10 @@
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.9.6",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
-    "concurrently": "^9.2.1",
-    "electron": "^39.2.7",
-    "electron-builder": "^26.4.0",
-    "open": "^11.0.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0",
-    "wait-on": "^9.0.3"
+    "vite": "^6.2.0"
   }
 }
