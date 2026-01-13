@@ -1,6 +1,8 @@
 
-import React from 'react';
-import { FileText, Code, Database, AlignLeft, ArrowRight, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { FileText, Code, Database, AlignLeft, ArrowRight, Sparkles, HardDrive, Clock } from 'lucide-react';
+import { workspaceService } from '../services/workspaceService';
+import { StoredFile } from '../types';
 
 interface Props {
   onSelectModule: (module: string) => void;
@@ -26,10 +28,64 @@ const ModuleCard = ({ icon, title, desc, onClick, color }: any) => (
   </button>
 );
 
+const timeAgo = (date: string | number | Date) => {
+  const seconds = Math.floor((new Date().getTime() - new Date(date).getTime()) / 1000);
+  let interval = seconds / 31536000;
+  if (interval > 1) return Math.floor(interval) + " years ago";
+  interval = seconds / 2592000;
+  if (interval > 1) return Math.floor(interval) + " months ago";
+  interval = seconds / 86400;
+  if (interval > 1) return Math.floor(interval) + " days ago";
+  interval = seconds / 3600;
+  if (interval > 1) return Math.floor(interval) + " hours ago";
+  interval = seconds / 60;
+  if (interval > 1) return Math.floor(interval) + " minutes ago";
+  return Math.floor(seconds) + " seconds ago";
+};
+
+const RecentFileCard = ({ file, onSelectModule }: { file: StoredFile; onSelectModule: (module: string) => void }) => {
+
+  const getIcon = (module: string) => {
+    switch(module) {
+      case 'predictions': return <FileText className="w-4 h-4 text-blue-500" />;
+      case 'resources': return <Code className="w-4 h-4 text-green-500" />;
+      case 'database': return <Database className="w-4 h-4 text-pink-500" />;
+      case 'formatter': return <AlignLeft className="w-4 h-4 text-slate-500" />;
+      default: return <HardDrive className="w-4 h-4" />;
+    }
+  };
+
+  return (
+    <button
+      onClick={() => onSelectModule(file.module)}
+      className="w-full text-left p-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-all flex items-center gap-4"
+    >
+      {getIcon(file.module)}
+      <div className="flex-1">
+        <p className="font-bold text-xs text-slate-800 truncate">{file.name}</p>
+        <p className="text-[10px] text-slate-500 flex items-center gap-1"><Clock className="w-2.5 h-2.5" /> {timeAgo(file.modifiedAt)}</p>
+      </div>
+      <ArrowRight className="w-4 h-4 text-slate-400" />
+    </button>
+  );
+};
+
+
 export const HomeDashboard: React.FC<Props> = ({ onSelectModule }) => {
+  const [recentFiles, setRecentFiles] = useState<StoredFile[]>([]);
+
+  useEffect(() => {
+    workspaceService.listFiles()
+      .then(files => {
+        const sorted = files.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
+        setRecentFiles(sorted.slice(0, 3));
+      })
+      .catch(err => console.error("Failed to fetch recent files:", err));
+  }, []);
+
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50/50 p-8 md:p-16 flex flex-col items-center justify-center">
-      <div className="max-w-4xl w-full">
+      <div className="max-w-5xl w-full">
         <div className="text-center mb-12">
            <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-sm mb-6">
               <Sparkles className="w-8 h-8 text-primary-600" />
@@ -38,9 +94,11 @@ export const HomeDashboard: React.FC<Props> = ({ onSelectModule }) => {
            <p className="text-slate-500 max-w-xl mx-auto text-lg">Select a specialized module to begin your translation or formatting task. Each module operates independently.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-           <ModuleCard 
-              color="blue"
+        <div className="flex gap-8">
+            <div className="flex-[2]">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                   <ModuleCard
+                      color="blue"
               icon={<FileText className="w-6 h-6" />}
               title="Predictions Translator"
               desc="Specialized for astrology prediction text. Features context-aware gender handling, transliteration, and smart batching."
@@ -67,6 +125,23 @@ export const HomeDashboard: React.FC<Props> = ({ onSelectModule }) => {
               desc="Validation and formatting utilities. Enforce tab rules, detect language contamination (Hindi in English files), and clean text."
               onClick={() => onSelectModule('formatter')}
            />
+                </div>
+            </div>
+            <div className="flex-1">
+                <div className="bg-white/80 p-6 rounded-2xl border border-slate-200/80">
+                    <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-slate-400" />
+                        Recent Activity
+                    </h3>
+                    <div className="space-y-3">
+                        {recentFiles.length > 0 ? (
+                            recentFiles.map(file => <RecentFileCard key={file.id} file={file} onSelectModule={onSelectModule} />)
+                        ) : (
+                            <p className="text-xs text-slate-500 text-center py-4">No recent files found.</p>
+                        )}
+                    </div>
+                </div>
+            </div>
         </div>
       </div>
     </div>

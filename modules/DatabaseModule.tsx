@@ -1,5 +1,6 @@
 
 import React, { useState, useRef, useImperativeHandle } from 'react';
+import toast from 'react-hot-toast';
 import { Database, FileUp, Save, Table as TableIcon, ArrowRight, Upload } from 'lucide-react';
 import { TargetLanguage, StoredFile, FileData } from '../types';
 import { GeminiService, DBBatchItem } from '../services/geminiService';
@@ -126,18 +127,19 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
           db.close();
 
       } catch (e: any) {
-          addLog('ERR', `DB Load Failed: ${e.message}`);
-          alert(`Failed to load database: ${e.message}`);
+          const errorMsg = `DB Load Failed: ${e.message}`;
+          addLog('ERR', errorMsg);
+          toast.error(errorMsg);
       }
   };
 
   const loadTargetDb = async (buffer: Uint8Array, fileName: string) => {
       try {
-          addLog('DB', `Loaded Target DB: ${fileName}`);
+          toast.success(`Loaded Target DB: ${fileName}`);
           targetDbBufferRef.current = buffer;
           setTargetFile({ name: fileName, content: "Target DB", id: Math.random().toString() });
       } catch (e: any) {
-          addLog('ERR', `Target DB Load Failed: ${e.message}`);
+          toast.error(`Target DB Load Failed: ${e.message}`);
       }
   };
 
@@ -168,7 +170,7 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
             const buffer = await f.arrayBuffer();
             await processDbBuffer(new Uint8Array(buffer), f.name);
         } catch (e: any) {
-            addLog('ERR', `File Read Error: ${e.message}`);
+            toast.error(`File Read Error: ${e.message}`);
         }
     }
   };
@@ -180,47 +182,40 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
             const buffer = await f.arrayBuffer();
             await loadTargetDb(new Uint8Array(buffer), f.name);
         } catch (e: any) {
-            addLog('ERR', `Target Read Error: ${e.message}`);
+            toast.error(`Target Read Error: ${e.message}`);
         }
     }
   };
 
   const handleProcess = async () => {
-     if (selectedTables.length === 0) return;
-     if (!dbBufferRef.current) return;
+    if (selectedTables.length === 0) return;
+    if (!dbBufferRef.current) return;
 
-     stopRef.current = false;
-     setStatus('processing');
-     const gemini = new GeminiService(customApiKey);
+    stopRef.current = false;
+    setStatus('processing');
+    const gemini = new GeminiService(customApiKey);
 
-     try {
+    const promise = new Promise<string>(async (resolve, reject) => {
+      try {
         // @ts-ignore
         const SQL = await window.initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${f}` });
         const sourceDb = new SQL.Database(dbBufferRef.current);
         
         let writableDb: any;
         let outputFileName = '';
-        let isOverwriting = false;
 
         if (targetFile && targetDbBufferRef.current) {
-            // Case 1: Write to Target DB
             writableDb = new SQL.Database(targetDbBufferRef.current);
-            isOverwriting = true;
-            addLog('DB', 'Processing will OVERWRITE data in the Target Database.');
             outputFileName = targetFile.name.replace('.db', `_${targetLang}.db`);
         } else {
-            // Case 2: Clone Source DB
             writableDb = new SQL.Database(dbBufferRef.current);
-            addLog('DB', 'No Target DB selected. Creating translated copy of Source DB.');
             outputFileName = file!.name.replace(/(\.db|\.sqlite|\.sqlite3)$/i, `_${targetLang}$1`);
         }
 
-        // Iterate Selected Tables
         for (const tableName of selectedTables) {
             if (stopRef.current) break;
             setCurrentProcessingTable(tableName);
             
-            // 1. Fetch ALL Data from Source
             const res = sourceDb.exec(`SELECT rowid as _row_id_, * FROM ${tableName}`);
             if (res.length === 0) {
                 addLog('WARN', `Table ${tableName} is empty. Skipping.`);
@@ -235,63 +230,49 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                 return obj;
             });
 
-            // 2. Identify Targets
             const targetColumns = identifyTargetColumns(tableName, columns.filter(c => c !== '_row_id_'));
             if (targetColumns.length === 0) {
                 addLog('WARN', `Table ${tableName} has no translatable columns. Skipping.`);
                 continue;
             }
 
-            // 3. Prepare Batches
-            const batchItems = tableRows.map((d: any, i: number) => {
-                const filteredData: any = {};
-                targetColumns.forEach(col => filteredData[col] = d[col]);
-                if (d.sex !== undefined) filteredData.sex = d.sex;
-                return { rowid: d._row_id_, data: filteredData };
-            });
+            const batchItems = tableRows.map((d: any) => ({
+                rowid: d._row_id_,
+                data: Object.fromEntries(targetColumns.map(col => [col, d[col]]))
+            }));
 
             addLog('DB', `Processing ${tableName}: ${batchItems.length} rows, Cols: [${targetColumns.join(', ')}]`);
 
-            // 4. Translate
             const resultMap = new Map<number, any>();
-            await processBatchQueue(batchItems, 50, async (batch, _, retry) => {
+            await processBatchQueue(batchItems, 50, async (batch) => {
                  const res = await gemini.translateDatabaseBatch(batch as DBBatchItem[], targetLang, 'translate');
                  res.forEach(r => resultMap.set(r.rowid, r.translatedData));
             }, (c) => setProgress(Math.round((c/batchItems.length)*100)), () => stopRef.current, addLog, 2000);
 
             if (stopRef.current) break;
 
-            // 5. Update Writable DB
             addLog('DB', `Updating Database table: ${tableName}...`);
             writableDb.exec("BEGIN TRANSACTION;");
             try {
                 resultMap.forEach((translatedData, rowid) => {
-                     const updates: string[] = [];
-                     const params: any[] = [];
-                     
-                     Object.keys(translatedData).forEach(col => {
-                         if (col !== 'sex') {
-                             updates.push(`${col} = ?`);
-                             params.push(translatedData[col]);
-                         }
-                     });
-                     
+                     const colsToUpdate = Object.keys(translatedData).filter(c => c !== 'sex');
+                     const updates = colsToUpdate.map(col => `${col} = ?`);
+                     const params = colsToUpdate.map(col => translatedData[col]);
+
                      if (updates.length > 0) {
-                         params.push(rowid);
-                         writableDb.run(`UPDATE ${tableName} SET ${updates.join(', ')} WHERE rowid = ?`, params);
+                         writableDb.run(`UPDATE ${tableName} SET ${updates.join(', ')} WHERE rowid = ?`, [...params, rowid]);
                      }
                 });
                 writableDb.exec("COMMIT;");
             } catch (e: any) {
                 writableDb.exec("ROLLBACK;");
-                addLog('ERR', `Failed to update ${tableName}: ${e.message}`);
+                throw new Error(`Failed to update ${tableName}: ${e.message}`);
             }
         }
 
-        // Final Export
         if (!stopRef.current) {
             const binary = writableDb.export();
-            workspaceService.saveFile({
+            await workspaceService.saveFile({
                 id: Math.random().toString(),
                 name: outputFileName,
                 content: binary,
@@ -301,15 +282,25 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                 createdAt: new Date(),
                 module: 'database'
             });
-            addLog('DB', `SAVED DATABASE (.db): ${outputFileName}`);
+            resolve(`Saved to Workspace: ${outputFileName}`);
+        } else {
+            reject(new Error('Process was stopped.'));
         }
 
         writableDb.close();
         sourceDb.close();
-        addLog('DB', 'All operations completed.');
+      } catch (e: any) {
+        reject(e);
+      }
+    });
 
-     } catch(e: any) { addLog('ERR', e.message); }
-     setStatus('idle');
+    toast.promise(promise, {
+        loading: 'Starting database translation...',
+        success: (msg) => msg,
+        error: (err) => `Error: ${err.message}`,
+    }).finally(() => {
+        setStatus('idle');
+    });
   };
 
   const renderTable = () => {

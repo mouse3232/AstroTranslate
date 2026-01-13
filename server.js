@@ -99,8 +99,12 @@ const server = http.createServer((req, res) => {
           .filter(file => file.endsWith('.json'))
           .map(file => {
             try {
-              const content = fs.readFileSync(path.join(userDir, file), 'utf8');
-              return JSON.parse(content);
+              const filePath = path.join(userDir, file);
+              const stats = fs.statSync(filePath);
+              const content = fs.readFileSync(filePath, 'utf8');
+              const data = JSON.parse(content);
+              data.modifiedAt = stats.mtime; // Add modification time
+              return data;
             } catch (readErr) {
               console.error(`Skipping corrupt file ${file}:`, readErr);
               return null;
@@ -150,10 +154,26 @@ const server = http.createServer((req, res) => {
           
           const body = bodyBuffer.toString('utf8');
           const fileData = JSON.parse(body);
-          
-          if (!fileData.id || !fileData.name) {
-            throw new Error('Invalid file data');
+
+          // --- INPUT VALIDATION ---
+          if (!fileData || typeof fileData !== 'object') {
+            throw new Error('Invalid payload format. Expected a JSON object.');
           }
+          const { id, name, module, content } = fileData;
+          if (typeof id !== 'string' || id.trim() === '') {
+            throw new Error('Invalid or missing "id" field.');
+          }
+          if (typeof name !== 'string' || name.trim() === '') {
+            throw new Error('Invalid or missing "name" field.');
+          }
+          if (typeof module !== 'string' || module.trim() === '') {
+            throw new Error('Invalid or missing "module" field.');
+          }
+           if (content === undefined) {
+            throw new Error('Missing "content" field.');
+          }
+          // --- END VALIDATION ---
+
           const filePath = path.join(userDir, `${fileData.id}.json`);
           fs.writeFileSync(filePath, JSON.stringify(fileData));
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -200,12 +220,11 @@ const server = http.createServer((req, res) => {
   }
 
   // Static File Serving
-  // FIX: Use urlPath (without query params) to find files on disk
-  let filePath = '.' + urlPath;
-  if (filePath === './') {
-    filePath = './index.html';
-  } else if (filePath.endsWith('/')) {
-    filePath += 'index.html';
+  const staticPath = path.join(__dirname, 'dist');
+
+  let filePath = path.join(staticPath, urlPath);
+  if (urlPath === '/') {
+    filePath = path.join(staticPath, 'index.html');
   }
 
   const extname = String(path.extname(filePath)).toLowerCase();
@@ -241,4 +260,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running at http://localhost:${PORT}/`);
   console.log(`Workspace Storage: ${WORKSPACE_DIR}`);
+  if (process.send) {
+    process.send('server-ready');
+  }
 });
