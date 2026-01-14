@@ -2,12 +2,12 @@
 import React, { useState, useRef, useImperativeHandle } from 'react';
 import { PlusCircle, ArrowRight, CheckCircle2, Download } from 'lucide-react';
 import { TargetLanguage, StoredFile, FileData } from '../types';
-import { GeminiService } from '../services/geminiService';
+import { GeminiService } from '../services/geminiService.ts';
 import { workspaceService } from '../services/workspaceService';
 import { Button } from '../components/Button';
 import FileUpload from '../components/FileUpload';
 import CodeBlock from '../components/CodeBlock';
-import { LANGUAGES } from '../constants';
+import { LANGUAGES } from '../constants.ts';
 
 interface Props {
   customApiKey: string;

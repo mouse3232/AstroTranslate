@@ -6,7 +6,7 @@ import { AdvancedFormatter } from '../services/advancedFormatter';
 import { Button } from '../components/Button';
 import { TableSelector } from '../components/TableSelector';
 import { workspaceService } from '../services/workspaceService';
-import { identifyTargetColumns } from '../utils/parser';
+import { identifyTargetColumns } from '../utils/parser.ts';
 
 interface Props {
   addLog: (module: string, message: string) => void;
