@@ -5,10 +5,12 @@
   "identifier": "com.ai-translation.app",
   "build": {
     "frontendDist": "../dist",
-    "sidecar": ["server.cjs"],
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
+  },
+  "bundle": {
+    "externalBin": ["bin/node.exe"]
   },
   "app": {
     "windows": [
