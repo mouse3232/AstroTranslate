@@ -1,148 +1,174 @@
 
-import React, { useState, useEffect } from 'react';
-import { FileText, Code, Database, AlignLeft, ArrowRight, Sparkles, HardDrive, Clock } from 'lucide-react';
-import { workspaceService } from '../services/workspaceService';
-import { StoredFile } from '../types';
+import React from 'react';
+import { FileText, Code, Database, AlignLeft, ArrowRight, Sparkles, HelpCircle, BookOpen, Type } from 'lucide-react';
+import { Button } from './Button';
 
 interface Props {
   onSelectModule: (module: string) => void;
 }
 
-const ModuleCard = ({ icon, title, desc, onClick, color }: any) => (
-  <button 
-    onClick={onClick}
-    className="group relative flex flex-col items-start p-6 bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-xl hover:border-primary-200 transition-all duration-300 text-left w-full h-full overflow-hidden"
-  >
-    <div className={`absolute top-0 right-0 w-32 h-32 bg-${color}-50 rounded-full blur-3xl opacity-0 group-hover:opacity-50 transition-opacity -mr-10 -mt-10`}></div>
-    
-    <div className={`p-3 rounded-xl bg-${color}-50 text-${color}-600 mb-4 group-hover:scale-110 transition-transform duration-300`}>
-      {icon}
-    </div>
-    
-    <h3 className="text-lg font-bold text-slate-900 mb-2 group-hover:text-primary-700">{title}</h3>
-    <p className="text-sm text-slate-500 leading-relaxed mb-6">{desc}</p>
-    
-    <div className="mt-auto flex items-center text-xs font-bold text-primary-600 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300">
-      Launch Module <ArrowRight className="w-3 h-3 ml-1" />
-    </div>
-  </button>
-);
-
-const timeAgo = (date: string | number | Date) => {
-  const seconds = Math.floor((new Date().getTime() - new Date(date).getTime()) / 1000);
-  let interval = seconds / 31536000;
-  if (interval > 1) return Math.floor(interval) + " years ago";
-  interval = seconds / 2592000;
-  if (interval > 1) return Math.floor(interval) + " months ago";
-  interval = seconds / 86400;
-  if (interval > 1) return Math.floor(interval) + " days ago";
-  interval = seconds / 3600;
-  if (interval > 1) return Math.floor(interval) + " hours ago";
-  interval = seconds / 60;
-  if (interval > 1) return Math.floor(interval) + " minutes ago";
-  return Math.floor(seconds) + " seconds ago";
-};
-
-const RecentFileCard = ({ file, onSelectModule }: { file: StoredFile; onSelectModule: (module: string) => void }) => {
-
-  const getIcon = (module: string) => {
-    switch(module) {
-      case 'predictions': return <FileText className="w-4 h-4 text-blue-500" />;
-      case 'resources': return <Code className="w-4 h-4 text-green-500" />;
-      case 'database': return <Database className="w-4 h-4 text-pink-500" />;
-      case 'formatter': return <AlignLeft className="w-4 h-4 text-slate-500" />;
-      default: return <HardDrive className="w-4 h-4" />;
-    }
-  };
-
-  return (
-    <button
-      onClick={() => onSelectModule(file.module)}
-      className="w-full text-left p-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-all flex items-center gap-4"
-    >
-      {getIcon(file.module)}
-      <div className="flex-1">
-        <p className="font-bold text-xs text-slate-800 truncate">{file.name}</p>
-        <p className="text-[10px] text-slate-500 flex items-center gap-1"><Clock className="w-2.5 h-2.5" /> {timeAgo(file.modifiedAt)}</p>
-      </div>
-      <ArrowRight className="w-4 h-4 text-slate-400" />
-    </button>
-  );
-};
-
-
 export const HomeDashboard: React.FC<Props> = ({ onSelectModule }) => {
-  const [recentFiles, setRecentFiles] = useState<StoredFile[]>([]);
-
-  useEffect(() => {
-    workspaceService.listFiles()
-      .then(files => {
-        const sorted = files.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime());
-        setRecentFiles(sorted.slice(0, 3));
-      })
-      .catch(err => console.error("Failed to fetch recent files:", err));
-  }, []);
-
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-50/50 p-8 md:p-16 flex flex-col items-center justify-center">
-      <div className="max-w-5xl w-full">
-        <div className="text-center mb-12">
-           <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-sm mb-6">
-              <Sparkles className="w-8 h-8 text-primary-600" />
-           </div>
-           <h1 className="text-4xl font-extrabold text-slate-900 mb-4 tracking-tight">AI Localization Suite</h1>
-           <p className="text-slate-500 max-w-xl mx-auto text-lg">Select a specialized module to begin your translation or formatting task. Each module operates independently.</p>
-        </div>
+    <div className="flex-1 overflow-y-auto bg-white">
+      {/* Hero / Header */}
+      <div className="bg-slate-50 border-b border-slate-200 px-8 py-12 text-center">
+         <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-sm mb-6">
+            <Sparkles className="w-8 h-8 text-primary-600" />
+         </div>
+         <h1 className="text-3xl font-extrabold text-slate-900 mb-4 tracking-tight">AI Localization Suite</h1>
+         <p className="text-slate-500 max-w-2xl mx-auto text-lg leading-relaxed">
+            Welcome to the centralized help center and glossary. Below you will find detailed documentation on how each module operates and how to utilize them effectively for your astrology software localization.
+         </p>
+      </div>
 
-        <div className="flex gap-8">
-            <div className="flex-[2]">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                   <ModuleCard
-                      color="blue"
-              icon={<FileText className="w-6 h-6" />}
-              title="Predictions Translator"
-              desc="Specialized for astrology prediction text. Features context-aware gender handling, transliteration, and smart batching."
-              onClick={() => onSelectModule('predictions')}
-           />
-           <ModuleCard 
-              color="green"
-              icon={<Code className="w-6 h-6" />}
-              title="Resource Localizer"
-              desc="Handle code resources (.js, .json, .res). Preserves syntax, keys, and variable placeholders while translating values."
-              onClick={() => onSelectModule('resources')}
-           />
-           <ModuleCard 
-              color="pink"
-              icon={<Database className="w-6 h-6" />}
-              title="Database Translator"
-              desc="Process massive JSON datasets. Automatically detects structure and translates content columns while preserving IDs."
-              onClick={() => onSelectModule('database')}
-           />
-           <ModuleCard 
-              color="slate"
-              icon={<AlignLeft className="w-6 h-6" />}
-              title="Advanced Formatter"
-              desc="Validation and formatting utilities. Enforce tab rules, detect language contamination (Hindi in English files), and clean text."
-              onClick={() => onSelectModule('formatter')}
-           />
-                </div>
-            </div>
-            <div className="flex-1">
-                <div className="bg-white/80 p-6 rounded-2xl border border-slate-200/80">
-                    <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-slate-400" />
-                        Recent Activity
-                    </h3>
-                    <div className="space-y-3">
-                        {recentFiles.length > 0 ? (
-                            recentFiles.map(file => <RecentFileCard key={file.id} file={file} onSelectModule={onSelectModule} />)
-                        ) : (
-                            <p className="text-xs text-slate-500 text-center py-4">No recent files found.</p>
-                        )}
-                    </div>
-                </div>
-            </div>
-        </div>
+      <div className="max-w-5xl mx-auto px-8 py-12 space-y-12">
+        
+        {/* Module 1: Resources */}
+        <section className="flex gap-8 items-start pb-12 border-b border-slate-100">
+           <div className="shrink-0 p-4 bg-green-50 text-green-600 rounded-xl">
+              <Code className="w-8 h-8" />
+           </div>
+           <div className="flex-1 space-y-4">
+              <div className="flex items-center justify-between">
+                 <h2 className="text-xl font-bold text-slate-900">1. Resource Localizer</h2>
+                 <Button onClick={() => onSelectModule('resources')}>Open Module <ArrowRight className="w-4 h-4 ml-2"/></Button>
+              </div>
+              <p className="text-slate-600 leading-relaxed">
+                Designed for UI strings and code resources. It intelligently distinguishes between code syntax (which must not change) and translatable string values.
+              </p>
+               <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                  <h3 className="text-sm font-bold text-slate-800 mb-2">Supported Formats</h3>
+                  <div className="flex gap-2 flex-wrap">
+                      {['.js', '.json', '.ts', '.res (DotNet)', '.txt (Key=Value)'].map(ext => (
+                          <span key={ext} className="px-2 py-1 bg-white border border-slate-200 rounded text-xs font-mono text-slate-600">{ext}</span>
+                      ))}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-3 leading-relaxed">
+                     For Key-Value files (e.g., <code>Key=Value</code>), it strictly translates only the value part. For Code files, it identifies string literals and translates them while ignoring variable names and keywords.
+                  </p>
+               </div>
+           </div>
+        </section>
+
+        {/* Module 2: Predictions (Text Translation) */}
+        <section className="flex gap-8 items-start pb-12 border-b border-slate-100">
+           <div className="shrink-0 p-4 bg-blue-50 text-blue-600 rounded-xl">
+              <FileText className="w-8 h-8" />
+           </div>
+           <div className="flex-1 space-y-4">
+              <div className="flex items-center justify-between">
+                 <h2 className="text-xl font-bold text-slate-900">2. Text Translation</h2>
+                 <Button onClick={() => onSelectModule('predictions')}>Open Module <ArrowRight className="w-4 h-4 ml-2"/></Button>
+              </div>
+              <p className="text-slate-600 leading-relaxed">
+                The core engine for translating astrology prediction text blocks. It parses custom format files (blocks separated by <code>#*</code> headers) and preserves rigid formatting rules.
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                    <h3 className="text-sm font-bold text-slate-800 mb-2 flex items-center gap-2"><BookOpen className="w-3 h-3"/> How it works</h3>
+                    <ul className="text-xs text-slate-500 space-y-2 list-disc pl-4">
+                       <li>Parses input file into blocks based on <code>#*</code> delimiter.</li>
+                       <li>Extracts gender context (Sex=0 for Male, Sex=1 for Female) from headers.</li>
+                       <li>Sends content to Gemini AI using <strong>Smart Batching</strong> to optimize context window usage.</li>
+                       <li>Reconstructs the file with translated text, preserving headers and structure.</li>
+                    </ul>
+                 </div>
+                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                    <h3 className="text-sm font-bold text-slate-800 mb-2 flex items-center gap-2"><Sparkles className="w-3 h-3"/> Key Features</h3>
+                    <ul className="text-xs text-slate-500 space-y-2 list-disc pl-4">
+                       <li><strong>Context-Aware:</strong> Translates "Businessperson" to "Businessman" or "Businesswoman" based on header.</li>
+                       <li><strong>Dual Sex Mode:</strong> Automatically generates both Male and Female versions for every block.</li>
+                       <li><strong>Shloka Handling:</strong> Option to transliterate Sanskrit Mantras or keep them in Devanagari.</li>
+                    </ul>
+                 </div>
+              </div>
+           </div>
+        </section>
+
+        {/* Module 3: Database */}
+        <section className="flex gap-8 items-start pb-12 border-b border-slate-100">
+           <div className="shrink-0 p-4 bg-pink-50 text-pink-600 rounded-xl">
+              <Database className="w-8 h-8" />
+           </div>
+           <div className="flex-1 space-y-4">
+              <div className="flex items-center justify-between">
+                 <h2 className="text-xl font-bold text-slate-900">3. Database Translator</h2>
+                 <Button onClick={() => onSelectModule('database')}>Open Module <ArrowRight className="w-4 h-4 ml-2"/></Button>
+              </div>
+              <p className="text-slate-600 leading-relaxed">
+                 A powerful tool for processing SQLite (<code>.db</code>) files. It allows you to select specific tables and translates content columns while maintaining row integrity.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                    <h3 className="text-sm font-bold text-slate-800 mb-2">Workflow</h3>
+                    <ol className="text-xs text-slate-500 space-y-2 list-decimal pl-4">
+                       <li>Load a Source <code>.db</code> file.</li>
+                       <li>Select specific tables to translate.</li>
+                       <li>(Optional) Load a Target <code>.db</code> to overwrite existing data.</li>
+                       <li>The system identifies text columns (e.g., 'Text', 'Prediction') and translates them row-by-row.</li>
+                    </ol>
+                 </div>
+                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                    <h3 className="text-sm font-bold text-slate-800 mb-2">Safety Features</h3>
+                    <ul className="text-xs text-slate-500 space-y-2 list-disc pl-4">
+                       <li><strong>Transactional Updates:</strong> Changes are committed only if the entire batch succeeds.</li>
+                       <li><strong>ID Preservation:</strong> Row IDs are strictly preserved to ensure relational integrity.</li>
+                       <li><strong>Format Preservation:</strong> Maintains tabs, newlines, and bullet points within database cells.</li>
+                       <li><strong>Mantra Options:</strong> Supports Transliteration and Sanskrit preservation.</li>
+                    </ul>
+                 </div>
+              </div>
+           </div>
+        </section>
+
+        {/* Module 4: Formatter (Tab Formatting) */}
+        <section className="flex gap-8 items-start pb-12 border-b border-slate-100">
+           <div className="shrink-0 p-4 bg-slate-100 text-slate-600 rounded-xl">
+              <AlignLeft className="w-8 h-8" />
+           </div>
+           <div className="flex-1 space-y-4">
+              <div className="flex items-center justify-between">
+                 <h2 className="text-xl font-bold text-slate-900">4. Tab Formatting</h2>
+                 <Button onClick={() => onSelectModule('formatter')}>Open Module <ArrowRight className="w-4 h-4 ml-2"/></Button>
+              </div>
+              <p className="text-slate-600 leading-relaxed">
+                 A Quality Assurance (QA) tool to enforce styling rules before shipping.
+              </p>
+              <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                <h3 className="text-sm font-bold text-slate-800 mb-2">Tab Fixer</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                    Automatically enforces indentation rules: Adds a tab character at the start of paragraphs containing 5+ words, unless they end with a colon.
+                </p>
+              </div>
+           </div>
+        </section>
+
+        {/* Module 5: Char Check */}
+        <section className="flex gap-8 items-start">
+           <div className="shrink-0 p-4 bg-indigo-50 text-indigo-600 rounded-xl">
+              <Type className="w-8 h-8" />
+           </div>
+           <div className="flex-1 space-y-4">
+              <div className="flex items-center justify-between">
+                 <h2 className="text-xl font-bold text-slate-900">5. Char Check</h2>
+                 <Button onClick={() => onSelectModule('charcheck')}>Open Module <ArrowRight className="w-4 h-4 ml-2"/></Button>
+              </div>
+              <p className="text-slate-600 leading-relaxed">
+                 Anomalies detector for language validation. Checks for mixed language content (e.g., Hindi chars in English DB).
+              </p>
+              <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                <h3 className="text-sm font-bold text-slate-800 mb-2">Deep Scanning Logic</h3>
+                <ul className="text-xs text-slate-500 space-y-2 list-disc pl-4">
+                    <li><strong>Target Columns:</strong> Strictly checks: <code>Text</code>, <code>Text1</code>, <code>Text2...</code>, <code>Question</code>, <code>Category</code>, <code>Prediction</code>, <code>Header</code>.</li>
+                    <li><strong>Table Rules:</strong> For tables ending in <code>_Header</code>, the scan <strong>skips the first 3 rows</strong> to avoid false positives in metadata.</li>
+                    <li><strong>Syntax Ignoring:</strong> Ignores special tags like <code>&lt;Var&gt;</code> to prevent errors.</li>
+                    <li><strong>Regex:</strong> English Scan checks for <code>[A-Z]</code>. Hindi Scan checks for <code>[\u0900-\u097F]</code>.</li>
+                </ul>
+              </div>
+           </div>
+        </section>
+
       </div>
     </div>
   );

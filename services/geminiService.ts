@@ -13,39 +13,65 @@ export interface DBBatchItem {
 }
 
 /**
- * Strict formatting: 
- * 1. All lines must start with a Tab (\t).
- * 2. EXCEPTION: If a line ends with a colon (:), it must NOT start with a tab.
- * 3. Preserve empty lines.
+ * INTELLIGENT FORMATTING PRESERVATION
+ * Enforces that the translated text matches the source's formatting structure.
+ * 1. Matches leading whitespace (tabs/spaces).
+ * 2. Matches trailing punctuation (specifically colons).
+ * 3. Preserves line breaks and paragraph structure.
  */
-function applyAstrologyFormatting(text: string): string {
-  if (!text || typeof text !== 'string') return text;
+function preserveFormatting(original: string, translated: string): string {
+  if (!original || !translated) return translated;
 
-  const lines = text.split('\n');
+  const originalLines = original.split(/\r?\n/);
+  const translatedLines = translated.split(/\r?\n/);
+
+  // Strategy 1: If line counts match, apply formatting line-by-line (Most accurate)
+  if (originalLines.length === translatedLines.length) {
+    return originalLines.map((oLine, i) => {
+      const tLine = translatedLines[i];
+      // Capture exact leading whitespace from source
+      const oLeading = oLine.match(/^[\s\t]*/)?.[0] || '';
+      
+      // Remove any leading whitespace Gemini might have hallucinated or changed
+      const tTrimmed = tLine.trimStart();
+      
+      let resLine = oLeading + tTrimmed;
+
+      // Enforce trailing colon if source has it
+      if (oLine.trimEnd().endsWith(':') && !resLine.trimEnd().endsWith(':')) {
+          resLine = resLine.trimEnd() + ':';
+      }
+
+      // (Optional) Numbering Check - simple heuristic for "1. ", "A. "
+      // If source starts with "1. " and target doesn't, prepend it.
+      // This is risky if Gemini translated "1." to "१.", so we skip strict enforcement 
+      // to avoid duplication, relying on the prompt for numbering.
+      
+      return resLine;
+    }).join('\n');
+  }
+
+  // Strategy 2: Mismatched lines (e.g. text wrapping changed). 
+  // Apply formatting based on the whole block context.
   
-  const processedLines = lines.map(line => {
-    const trimmed = line.trim();
-    if (!trimmed) return ""; // Return empty string for blank lines
+  // A. Leading Whitespace of the block
+  const globalLeading = original.match(/^[\s\t]*/)?.[0] || '';
+  let result = globalLeading + translated.trimStart();
 
-    // Rule 2: Exception for lines ending in colon
-    if (trimmed.endsWith(':')) {
-      return trimmed;
-    }
+  // B. Trailing Colon
+  if (original.trimEnd().endsWith(':') && !result.trimEnd().endsWith(':')) {
+      result = result.trimEnd() + ':';
+  }
 
-    // Rule 1: Default indent with tab
-    return `\t${trimmed}`; 
-  });
-
-  return processedLines.join('\n');
+  return result;
 }
 
 /**
  * Helper to retry async functions with exponential backoff.
- * Essential for high concurrency batching.
  */
 async function retry<T>(
   fn: () => Promise<T>, 
-  retries = 10, // Increased default to 10 for ultra-safety
+  retries = 10, 
   baseDelay = 10000, 
   factor = 2
 ): Promise<T> {
@@ -56,7 +82,6 @@ async function retry<T>(
     } catch (error: any) {
       lastError = error;
       const msg = (error.message || '').toLowerCase();
-      // Retry on Rate Limit (429) or Server Error (503/500)
       const isRetryable = 
         msg.includes('429') || 
         msg.includes('503') || 
@@ -64,15 +89,13 @@ async function retry<T>(
         error.status === 503;
 
       if (attempt < retries && isRetryable) {
-        // AGGRESSIVE COOL DOWN for 429
         let delay = baseDelay * Math.pow(factor, attempt) + (Math.random() * 1000);
         if (msg.includes('429') || error.status === 429) {
-            delay = 60000; // Fixed 60s for rate limits
+            delay = 60000; 
             console.warn(`[Gemini] Rate limited (429). Cooling down for 60s... (Attempt ${attempt + 1}/${retries})`);
         } else {
             console.warn(`[Gemini] Server error. Retrying in ${Math.round(delay)}ms... (Attempt ${attempt + 1}/${retries})`);
         }
-        
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -104,6 +127,16 @@ export class GeminiService {
         }
       } catch (e) {}
     }
+    if (!key) {
+      try {
+        // Fallback to injected server env (propagated from server.js)
+        // @ts-ignore
+        if (typeof window !== 'undefined' && window.__SERVER_ENV__ && window.__SERVER_ENV__.API_KEY) {
+           // @ts-ignore
+           key = window.__SERVER_ENV__.API_KEY;
+        }
+      } catch (e) {}
+    }
 
     this.hasKey = !!key;
     this.ai = new GoogleGenAI({ apiKey: key || 'dummy_key' });
@@ -128,17 +161,12 @@ export class GeminiService {
     this.validateKey();
     if (items.length === 0) return [];
 
-    // Pre-process to separate leading whitespace
-    const preProcessed = items.map(item => {
-      const match = item.text.match(/^[\s\t]*/);
-      const leading = match ? match[0] : "";
-      const content = item.text.substring(leading.length);
-      // Map context string to numeric Sex value for the model
-      const sex = item.context === 'Female' ? 1 : 0; 
-      return { leading, content, sex };
-    });
+    // Pre-process (Pass Full content, logic handled in post-processing)
+    const preProcessed = items.map(item => ({
+      text: item.text,
+      sex: item.context === 'Female' ? 1 : 0
+    }));
 
-    // Gemini 3 Flash Preview for text tasks
     const modelName = 'gemini-3-flash-preview';
 
     const batchResponseSchema = {
@@ -170,55 +198,41 @@ export class GeminiService {
       - "text": The content to process.
       - "sex": The gender context (0 = Male, 1 = Female).
       
-      STRICT GENDER & TONE RULES (APPLY PER ITEM BASED ON "sex" VALUE):
-      1. SEX PARAMETER:
-         - sex=0 means MASCULINE context.
-         - sex=1 means FEMININE context.
-      2. TONE ENFORCEMENT:
-         - IF sex=0: Use masculine grammatical forms, pronouns, titles, and profession names.
-         - IF sex=1: MANDATORILY convert the output to FEMININE tone. Use feminine forms, pronouns, titles.
-           - Source text (Neutral/Masculine) MUST be transformed into Feminine form.
-      3. WORD MAPPING EXAMPLES:
-         - "Businessperson" -> "Businessman" (sex=0) / "Businesswoman" (sex=1).
-         - "Spouse" -> "Wife" (sex=0) / "Husband" (sex=1).
-         - "He" -> "He" (sex=0) / "She" (sex=1) [when referring to the native].
-         - NEVER return the same neutral term for both sexes if distinct terms exist.
+      STRICT FORMATTING & PRESERVATION RULES (CRITICAL):
+      1. WHITESPACE: You MUST preserve all leading/trailing tabs (\t) and spaces exactly as they appear in the source.
+      2. NUMBERING: Preserve all numbering (e.g., "1.", "1)", "a.") exactly. Do not change the format of the list.
+      3. PUNCTUATION: Preserve trailing colons (:) exactly.
+      4. VARIABLES: Keep <Var>, {0}, %s EXACTLY.
+      5. PARAGRAPHS: Do not merge lines. Do not split lines.
       
-      GENERAL RULES:
-      1. PRESERVE variables like <Var>, {0}, %s EXACTLY.
-      2. MANTRA HANDLING:
-         ${keepSanskrit ? "- Keep Mantras/Shlokas in ORIGINAL Sanskrit (Devanagari). Do not translate." : transliterateShlokas ? "- Transliterate Mantras into phonetic English." : "- Translate Mantras normally."}
+      GENDER RULES:
+      - sex=0: Masculine tone (Businessman, He).
+      - sex=1: Feminine tone (Businesswoman, She).
+      
+      MANTRA HANDLING:
+      ${keepSanskrit ? "- Keep Mantras/Shlokas in ORIGINAL Sanskrit (Devanagari). Do not translate." : transliterateShlokas ? "- Transliterate Mantras into phonetic English." : "- Translate Mantras normally."}
 
-      ABSOLUTE RULES (NO EXCEPTIONS):
-      1. ZERO ORIGINAL TEXT: The output must contain zero original-language text from the input.
-      2. NO COPYING: No word, phrase, sentence, or character sequence may appear in the output exactly as it appears in the input (unless it is a proper noun or variable).
-      3. FULL PROCESSING: The entire input must be fully processed. 
-      4. LENGTH CHECK: Output length must be ≥ 99% of the input word count.
-      5. NO SUMMARIES: Do not summarize. Do not skip lines. Do not truncate.
-      6. NO EXPLANATIONS: Return only the processed text strings in the JSON structure.
-      7. FAILURE HANDLING: If any part cannot be processed, return an empty string for that specific item (do not return partial text).
+      OUTPUT RULES:
+      - Return STRICT JSON.
+      - "processedText" must contain the final string.
     `;
-
-    // Construct the payload with explicit sex per item
-    const payload = preProcessed.map(p => ({
-      text: p.content,
-      sex: p.sex
-    }));
 
     return retry(async () => {
       const response = await this.ai.models.generateContent({
         model: modelName,
-        contents: [{ role: 'user', parts: [{ text: prompt }, { text: JSON.stringify(payload) }] }],
+        contents: [{ role: 'user', parts: [{ text: prompt }, { text: JSON.stringify(preProcessed) }] }],
         config: { responseMimeType: "application/json", responseSchema: batchResponseSchema }
       });
 
       const parsed = JSON.parse(response.text || "{}");
       const results = parsed.results || [];
 
-      return preProcessed.map((item, idx) => ({
-        // Apply strict formatting instead of preserving original leading whitespace
-        text: applyAstrologyFormatting(results[idx]?.processedText ?? item.content)
-      }));
+      return items.map((item, idx) => {
+        const translatedRaw = results[idx]?.processedText ?? item.text;
+        // SCRIPT TO CHECK & ENFORCE FORMATTING
+        const finalCorrected = preserveFormatting(item.text, translatedRaw);
+        return { text: finalCorrected };
+      });
     });
   }
 
@@ -269,7 +283,6 @@ export class GeminiService {
 
   /**
    * APP 2.5: DotNet/Text Resource Localizer
-   * SEQUENTIAL VERSION
    */
   async translateDotNetResource(
     content: string,
@@ -282,7 +295,7 @@ export class GeminiService {
     const totalLines = lines.length;
     
     // Create Batches
-    const BATCH_SIZE = 5; // Reduced from 10 to 5 for safety
+    const BATCH_SIZE = 5; 
     const batches: { lines: string[], index: number }[] = [];
     
     for (let i = 0; i < totalLines; i += BATCH_SIZE) {
@@ -303,26 +316,16 @@ export class GeminiService {
       4. DELIMITERS: Split value by "*#*", translate segments, rejoin with "*#*".
       5. PLACEHOLDERS: Preserve "%$&Name(0)", "{0}", "<Var>".
       6. Return ONLY the processed text block.
-
-      ABSOLUTE PROCESSING GATES (NO EXCEPTIONS):
-      - The 'Value' part must contain zero original-language text.
-      - No word/phrase in 'Value' may appear exactly as input.
-      - Output length must be ≥ 99% of input. No Summaries.
-      - No skipped lines. No copied phrases. No explanations.
     `;
 
     const resultMap = new Map<number, string[]>();
     let completedLines = 0;
 
-    // Process Batches Sequentially
     for (const batch of batches) {
-        if (checkStop && checkStop()) {
-            throw new Error("Processing stopped by user.");
-        }
+        if (checkStop && checkStop()) throw new Error("Processing stopped by user.");
 
         const batchText = batch.lines.join('\n');
         
-        // Skip empty batches
         if (!batchText.trim()) {
              resultMap.set(batch.index, batch.lines);
              completedLines += batch.lines.length;
@@ -331,7 +334,6 @@ export class GeminiService {
         }
 
         try {
-            // Processing
             const processedText = await retry(async () => {
                 const response = await this.ai.models.generateContent({
                     model: 'gemini-3-pro-preview',
@@ -344,7 +346,6 @@ export class GeminiService {
             let resultText = processedText.replace(/^```[a-z]*\n/, '').replace(/\n```$/, '');
             const resultLines = resultText.split(/\r?\n/);
             
-            // Reconstruction Logic to handle minor AI line count mismatch or key corruption
             const reconstructedBatch: string[] = [];
             for (let j = 0; j < batch.lines.length; j++) {
                 const originalLine = batch.lines[j];
@@ -375,17 +376,14 @@ export class GeminiService {
             resultMap.set(batch.index, reconstructedBatch);
             completedLines += batch.lines.length;
             onProgress(completedLines, totalLines, `Processed lines ${completedLines}/${totalLines}`);
-            
-            // Safety Delay
-            await new Promise(r => setTimeout(r, 5000)); 
+            await new Promise(r => setTimeout(r, 2000)); 
 
         } catch (err: any) {
             console.error(`Batch failed:`, err);
-            resultMap.set(batch.index, batch.lines); // Fallback to original
+            resultMap.set(batch.index, batch.lines);
         }
     }
 
-    // Assemble final output
     const finalLines: string[] = [];
     batches.sort((a, b) => a.index - b.index).forEach(b => {
         const res = resultMap.get(b.index) || b.lines;
@@ -401,7 +399,8 @@ export class GeminiService {
   async translateDatabaseBatch(
     items: DBBatchItem[],
     targetLanguage: string,
-    mode: 'translate' | 'rewrite'
+    mode: 'translate' | 'rewrite',
+    options?: { transliterate?: boolean; keepSanskrit?: boolean; }
   ): Promise<any[]> {
     this.validateKey();
     if (items.length === 0) return [];
@@ -428,13 +427,17 @@ export class GeminiService {
 
     const rules = `
       ABSOLUTE RULES (NO EXCEPTIONS):
-      1. ZERO ORIGINAL TEXT: The output must contain zero original-language text from the input (unless it is a proper noun/variable).
-      2. NO COPYING: No word, phrase, sentence, or character sequence may appear exactly as it appears in the input.
-      3. FULL PROCESSING: The entire input must be fully processed.
-      4. LENGTH CHECK: Output length must be ≥ 99% of the input word count.
-      5. NO SUMMARIES: Do not summarize. Do not skip lines.
-      6. NO EXPLANATIONS: Return only JSON.
+      1. EXACTLY COPY formatting: leading tabs (\t), newlines, and bullet points from source.
+      2. EXACTLY COPY trailing punctuation like colons (:).
+      3. Do NOT summarize.
+      4. Return ONLY JSON.
     `;
+
+    const mantraRule = options?.keepSanskrit 
+       ? "- Keep Mantras/Shlokas in ORIGINAL Sanskrit (Devanagari). Do not translate." 
+       : options?.transliterate 
+            ? "- Transliterate Mantras into phonetic English." 
+            : "- Translate Mantras normally.";
 
     const systemPrompt = mode === 'translate' ? `
       You are an expert translator for Vedic Astrology software.
@@ -442,45 +445,18 @@ export class GeminiService {
       
       INPUT: Array of JSON objects. Each may contain a 'sex' field.
       
-      STRICT GENDER RULES (MANDATORY):
-      1. INSPECT 'sex' field in EACH object:
-         - sex=0 OR sex='0' -> MASCULINE Context (Male).
-         - sex=1 OR sex='1' -> FEMININE Context (Female).
-      2. APPLY TONE based on specific 'sex' value:
-         - Sex=0: Use Masculine terms (Businessman, Husband, Him).
-         - Sex=1: Use Feminine terms (Businesswoman, Wife, Her).
-         - IF source is "Businessperson":
-            - Output "Businessman" for Sex=0.
-            - Output "Businesswoman" for Sex=1.
-      3. DEFAULT: If 'sex' is missing, assume Neutral/Masculine.
-      
-      GENERAL RULES:
-      1. Meaning-for-meaning translation.
-      2. "The native" -> "You".
-      3. Decode KrutiDev/Devlys to Unicode.
-      4. Return ONLY JSON.
+      STRICT GENDER RULES:
+      - sex=0: Masculine (Businessman, He).
+      - sex=1: Feminine (Businesswoman, She).
 
+      MANTRA HANDLING:
+      ${mantraRule}
+      
       ${rules}
     ` : `
       You are an expert linguistic editor.
       TASK: Rewrite JSON data in Unicode, strictly preserving meaning.
       
-      INPUT: Array of JSON objects. Each may contain a 'sex' field.
-      
-      STRICT GENDER RULES (MANDATORY):
-      1. INSPECT 'sex' field in EACH object:
-         - sex=0 -> MASCULINE Context.
-         - sex=1 -> FEMININE Context.
-      2. APPLY TONE based on specific 'sex' value:
-         - Sex=0: Masculine grammar/terms.
-         - Sex=1: Feminine grammar/terms (Convert source if needed).
-         
-      GENERAL RULES:
-      1. Fix grammar/spelling.
-      2. "The native" -> "You".
-      3. Convert KrutiDev/Devlys to Unicode.
-      4. Return ONLY JSON.
-
       ${rules}
     `;
 
@@ -511,10 +487,14 @@ export class GeminiService {
         const formattedData: Record<string, string> = {};
         Object.keys(rawTranslated).forEach(col => {
           if (col === '_row_id_') return;
-          if (typeof rawTranslated[col] === 'string') {
-            formattedData[col] = applyAstrologyFormatting(rawTranslated[col]);
+          const originalVal = item.data[col];
+          const translatedVal = rawTranslated[col];
+          
+          if (typeof originalVal === 'string' && typeof translatedVal === 'string') {
+            // SCRIPT TO CHECK & ENFORCE FORMATTING in DB
+            formattedData[col] = preserveFormatting(originalVal, translatedVal);
           } else {
-            formattedData[col] = rawTranslated[col];
+            formattedData[col] = translatedVal;
           }
         });
 

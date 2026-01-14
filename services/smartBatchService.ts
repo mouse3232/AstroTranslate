@@ -12,8 +12,42 @@ export class SmartBatchService {
   private minuteStart = Date.now();
 
   constructor(apiKey: string) {
-    this.apiKey = apiKey;
-    this.client = new GoogleGenAI({ apiKey });
+    let key = apiKey;
+    
+    // 1. Check Vite Environment
+    if (!key) {
+      try {
+        // @ts-ignore
+        if (typeof import.meta !== 'undefined' && import.meta.env) {
+          // @ts-ignore
+          key = import.meta.env.VITE_API_KEY; 
+        }
+      } catch (e) {}
+    }
+
+    // 2. Check Process Environment
+    if (!key) {
+      try {
+        if (typeof process.env !== 'undefined' && process.env) {
+          key = process.env.API_KEY || '';
+        }
+      } catch (e) {}
+    }
+
+    // 3. Check Server Injected Environment (Critical for Client Propagation)
+    if (!key) {
+      try {
+        // @ts-ignore
+        if (typeof window !== 'undefined' && window.__SERVER_ENV__ && window.__SERVER_ENV__.API_KEY) {
+           // @ts-ignore
+           key = window.__SERVER_ENV__.API_KEY;
+        }
+      } catch (e) {}
+    }
+
+    this.apiKey = key;
+    // Initialize with key or dummy to prevent instant crash, allow validation later
+    this.client = new GoogleGenAI({ apiKey: key || 'dummy_key' });
   }
 
   /**
@@ -87,6 +121,10 @@ export class SmartBatchService {
     addLog: (mod: string, msg: string) => void
   ): Promise<Record<string, string>> {
     
+    if (!this.apiKey || this.apiKey === 'dummy_key') {
+        throw new Error("API key is missing. Please check your settings or server configuration.");
+    }
+
     // 1. Create Smart Batches
     const batches = this.createSmartBatches(items);
     addLog('SMART', `Created ${batches.length} optimized batches based on word count.`);
@@ -183,11 +221,27 @@ export class SmartBatchService {
                 
                 if (Array.isArray(json)) {
                     json.forEach((resItem: any, idx: number) => {
-                         // Fallback logic for ordering
                          const original = payload[idx];
                          // Try to match by ID if returned, else index
-                         const text = resItem.processedText || resItem.text || resItem; 
+                         let text = resItem.processedText || resItem.text || resItem; 
+                         
                          if (original && typeof text === 'string') {
+                             // --- STRICT WHITESPACE INHERITANCE FIX ---
+                             // 1. Capture exact leading whitespace (tabs/spaces) from source
+                             const leadingWhitespace = original.text.match(/^[\s\t]*/)?.[0] || '';
+                             
+                             // 2. Strip leading whitespace from AI response (if any)
+                             const content = text.trimStart();
+                             
+                             // 3. Reconstruct
+                             text = leadingWhitespace + content;
+
+                             // 4. Ensure trailing colon matches source (optional but good for astrology files)
+                             if (original.text.trimEnd().endsWith(':') && !text.trimEnd().endsWith(':')) {
+                                text = text.trimEnd() + ':';
+                             }
+                             // -----------------------------------------
+
                              resultsMap[original.id] = text;
                          }
                     });
@@ -197,7 +251,12 @@ export class SmartBatchService {
                 onProgress(completedCount, items.length);
 
             } catch (err: any) {
+                // Enhance error message if it looks like an auth error
+                if (err.message?.includes('API key') || err.status === 403) {
+                     throw new Error(`API Key Invalid or Missing: ${err.message}`);
+                }
                 addLog('ERR', `Batch ${i} failed: ${err.message}`);
+                throw err; // Re-throw to be caught by caller if needed, or handled in Promise.all
             } finally {
                 // Remove self from active
                 const idx = activePromises.indexOf(p);
@@ -208,8 +267,14 @@ export class SmartBatchService {
         activePromises.push(p);
     }
 
-    // Wait for remaining
-    await Promise.all(activePromises);
+    // Wait for remaining - utilize allSettled to avoid failing everything on one batch error
+    const results = await Promise.allSettled(activePromises);
+    
+    // Check if any rejected fatally (like Auth error)
+    const fatalError = results.find(r => r.status === 'rejected' && r.reason.message?.includes('API Key'));
+    if (fatalError && fatalError.status === 'rejected') {
+        throw new Error(fatalError.reason.message);
+    }
 
     return resultsMap;
   }

@@ -97,7 +97,7 @@ export interface StoredFile {
   mimeType: string;
   size: number;
   createdAt: Date;
-  module: 'predictions' | 'resources' | 'database' | 'formatter';
+  module: 'predictions' | 'resources' | 'database' | 'formatter' | 'charcheck';
 }
 
 export interface FileData {

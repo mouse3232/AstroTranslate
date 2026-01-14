@@ -146,18 +146,39 @@ class WorkspaceService {
 
         const files = await response.json();
 
-        const processedFiles = files.map((f: any) => {
-            if (f.isBase64) {
-                f.content = this.base64ToBuffer(f.content);
-            }
-            return f;
-        });
-
-        return processedFiles.sort((a: StoredFile, b: StoredFile) => 
+        // Files now only contain metadata. Content is fetched on demand via getFile(id).
+        // Sorting by date
+        return files.sort((a: StoredFile, b: StoredFile) => 
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
     } catch (error) {
         console.warn("Workspace GetFiles Error:", error);
+        throw error;
+    }
+  }
+
+  async getFile(id: string): Promise<StoredFile> {
+    const baseUrl = this.getApiUrl();
+    const targetUrl = baseUrl ? `${baseUrl}/api/workspace/${id}` : `/api/workspace/${id}`;
+
+    try {
+        const response = await fetch(targetUrl, {
+            headers: this.getHeaders()
+        });
+
+        if (!response.ok) {
+           throw new Error(`Failed to fetch file content: ${response.status}`);
+        }
+
+        const file = await response.json();
+        
+        if (file.isBase64) {
+            file.content = this.base64ToBuffer(file.content);
+        }
+        
+        return file;
+    } catch (error) {
+        console.error("Workspace GetFile Error:", error);
         throw error;
     }
   }

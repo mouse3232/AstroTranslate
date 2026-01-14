@@ -4,6 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+// Attempt to load .env if available (optional support for local dev with dotenv)
+try { require('dotenv').config(); } catch (e) {}
+
 const PORT = process.env.PORT || 3000;
 const WORKSPACE_DIR = path.join(__dirname, 'dist', 'workspaces');
 
@@ -13,27 +16,31 @@ if (!fs.existsSync(WORKSPACE_DIR)) {
 }
 
 // --- CLEANUP ROUTINE ---
-// Automatically delete files older than 30 days
+// Automatically delete files older than 25 days
 function cleanupOldFiles() {
-  console.log('Running workspace cleanup...');
+  console.log('Running workspace cleanup (Threshold: 25 days)...');
   const userDir = path.join(WORKSPACE_DIR, 'default');
   if (fs.existsSync(userDir)) {
     try {
       const files = fs.readdirSync(userDir);
       const now = Date.now();
-      const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+      const TWENTY_FIVE_DAYS_MS = 25 * 24 * 60 * 60 * 1000;
       let deletedCount = 0;
 
       files.forEach(file => {
         const filePath = path.join(userDir, file);
-        const stats = fs.statSync(filePath);
-        if (now - stats.mtimeMs > THIRTY_DAYS_MS) {
-           fs.unlinkSync(filePath);
-           deletedCount++;
+        try {
+            const stats = fs.statSync(filePath);
+            if (now - stats.mtimeMs > TWENTY_FIVE_DAYS_MS) {
+               fs.unlinkSync(filePath);
+               deletedCount++;
+            }
+        } catch (e) {
+            // Ignore error if file disappears or stat fails
         }
       });
       if (deletedCount > 0) {
-        console.log(`Cleanup: Deleted ${deletedCount} files older than 30 days.`);
+        console.log(`Cleanup: Deleted ${deletedCount} files older than 25 days.`);
       } else {
         console.log('Cleanup: No old files found.');
       }
@@ -43,10 +50,8 @@ function cleanupOldFiles() {
   }
 }
 
-// Run cleanup on startup
+// Run cleanup on startup ONLY
 cleanupOldFiles();
-// Run cleanup every 24 hours
-setInterval(cleanupOldFiles, 24 * 60 * 60 * 1000);
 // -----------------------
 
 const MIME_TYPES = {
@@ -92,25 +97,24 @@ const server = http.createServer((req, res) => {
       fs.mkdirSync(userDir, { recursive: true });
     }
 
-    // LIST FILES
+    // LIST FILES (METADATA ONLY) - Prevents JSON string length error
     if (req.method === 'GET' && urlPath === '/api/workspace') {
       try {
         const files = fs.readdirSync(userDir)
           .filter(file => file.endsWith('.json'))
           .map(file => {
             try {
-              const filePath = path.join(userDir, file);
-              const stats = fs.statSync(filePath);
-              const content = fs.readFileSync(filePath, 'utf8');
+              // We read the file but omit 'content' field in the list response
+              const content = fs.readFileSync(path.join(userDir, file), 'utf8');
               const data = JSON.parse(content);
-              data.modifiedAt = stats.mtime; // Add modification time
-              return data;
+              const { content: _, ...meta } = data; // Omit content
+              return meta;
             } catch (readErr) {
               console.error(`Skipping corrupt file ${file}:`, readErr);
               return null;
             }
           })
-          .filter(item => item !== null); // Filter out failed reads
+          .filter(item => item !== null);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(files));
@@ -120,6 +124,22 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: 'Failed to list files' }));
       }
       return;
+    }
+
+    // GET FILE CONTENT (SPECIFIC FILE)
+    if (req.method === 'GET' && urlPath.startsWith('/api/workspace/')) {
+        const fileId = urlPath.split('/').pop();
+        const filePath = path.join(userDir, `${fileId}.json`);
+        if (fs.existsSync(filePath)) {
+            // Stream the file to avoid loading huge JSON in memory for res.end() string/buffer limit
+            const readStream = fs.createReadStream(filePath);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            readStream.pipe(res);
+        } else {
+             res.writeHead(404);
+             res.end(JSON.stringify({ error: 'File not found' }));
+        }
+        return;
     }
 
     // SAVE FILE
@@ -154,26 +174,10 @@ const server = http.createServer((req, res) => {
           
           const body = bodyBuffer.toString('utf8');
           const fileData = JSON.parse(body);
-
-          // --- INPUT VALIDATION ---
-          if (!fileData || typeof fileData !== 'object') {
-            throw new Error('Invalid payload format. Expected a JSON object.');
+          
+          if (!fileData.id || !fileData.name) {
+            throw new Error('Invalid file data');
           }
-          const { id, name, module, content } = fileData;
-          if (typeof id !== 'string' || id.trim() === '') {
-            throw new Error('Invalid or missing "id" field.');
-          }
-          if (typeof name !== 'string' || name.trim() === '') {
-            throw new Error('Invalid or missing "name" field.');
-          }
-          if (typeof module !== 'string' || module.trim() === '') {
-            throw new Error('Invalid or missing "module" field.');
-          }
-           if (content === undefined) {
-            throw new Error('Missing "content" field.');
-          }
-          // --- END VALIDATION ---
-
           const filePath = path.join(userDir, `${fileData.id}.json`);
           fs.writeFileSync(filePath, JSON.stringify(fileData));
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -220,15 +224,35 @@ const server = http.createServer((req, res) => {
   }
 
   // Static File Serving
-  const staticPath = path.join(__dirname, 'dist');
-
-  let filePath = path.join(staticPath, urlPath);
-  if (urlPath === '/') {
-    filePath = path.join(staticPath, 'index.html');
+  // FIX: Use urlPath (without query params) to find files on disk
+  let filePath = '.' + urlPath;
+  if (filePath === './') {
+    filePath = './index.html';
+  } else if (filePath.endsWith('/')) {
+    filePath += 'index.html';
   }
 
   const extname = String(path.extname(filePath)).toLowerCase();
   const contentType = MIME_TYPES[extname] || 'application/octet-stream';
+
+  const injectEnvAndSend = (res, content) => {
+    // FORCE NO CACHE for HTML to ensure API key is always injected fresh
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
+    const apiKey = (process.env.API_KEY || '').trim();
+    let html = content.toString('utf-8');
+    // Inject global var before closing head
+    if (html.includes('</head>')) {
+        html = html.replace('</head>', `<script>window.__SERVER_ENV__={API_KEY:"${apiKey}"}</script></head>`);
+    } else {
+        // Fallback if no head tag
+        html += `<script>window.__SERVER_ENV__={API_KEY:"${apiKey}"}</script>`;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(html, 'utf-8');
+  };
 
   fs.readFile(filePath, (error, content) => {
     if (error) {
@@ -240,8 +264,7 @@ const server = http.createServer((req, res) => {
                 res.writeHead(500);
                 res.end('Error loading index.html. Run npm run build first.');
             } else {
-                res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(content, 'utf-8');
+                injectEnvAndSend(res, content);
             }
         });
       } else {
@@ -249,8 +272,14 @@ const server = http.createServer((req, res) => {
         res.end('Server Error: '+error.code);
       }
     } else {
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(content, 'utf-8');
+      if (extname === '.html') {
+          injectEnvAndSend(res, content);
+      } else {
+          // Allow caching for assets (JS/CSS)
+          res.setHeader('Cache-Control', 'public, max-age=31536000');
+          res.writeHead(200, { 'Content-Type': contentType });
+          res.end(content, 'utf-8');
+      }
     }
   });
 
@@ -260,7 +289,5 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running at http://localhost:${PORT}/`);
   console.log(`Workspace Storage: ${WORKSPACE_DIR}`);
-  if (process.send) {
-    process.send('server-ready');
-  }
+  if (process.env.API_KEY) console.log("API Key loaded from environment.");
 });

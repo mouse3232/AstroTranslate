@@ -1,27 +1,24 @@
 
 import React, { useState, useImperativeHandle, useRef } from 'react';
-import { Database, AlignLeft, AlertCircle, Save, FileUp, Table as TableIcon, Check, Download } from 'lucide-react';
+import { AlignLeft, AlertCircle, Save, FileUp, Check, Download, Database, ArrowRight } from 'lucide-react';
 import { StoredFile, FileData } from '../types';
 import { AdvancedFormatter } from '../services/advancedFormatter';
 import { Button } from '../components/Button';
 import { TableSelector } from '../components/TableSelector';
 import { workspaceService } from '../services/workspaceService';
-import { identifyTargetColumns } from '../utils/parser.ts';
+import { identifyTargetColumns } from '../utils/parser';
+import { ToastType } from '../components/Toast';
 
 interface Props {
   addLog: (module: string, message: string) => void;
+  notify: (type: ToastType, message: string) => void;
 }
 
-export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) => {
+export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify }, ref) => {
   const [file, setFile] = useState<FileData | null>(null);
-  
-  // Data for PREVIEW ONLY (First selected table usually)
-  const [previewData, setPreviewData] = useState<any[]>([]);
-  const [previewTable, setPreviewTable] = useState<string>('');
-
   const [tables, setTables] = useState<string[]>([]);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
-  const [issues, setIssues] = useState<{table: string, loc: string, msg: string}[]>([]);
+  // Only tab formatting messages now, removed language scan issues if any
   const [isProcessing, setIsProcessing] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -31,8 +28,10 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) =>
     loadFile: async (f: StoredFile) => {
         if (f.content instanceof Uint8Array || typeof f.content !== 'string') {
             await processDbBuffer(f.content instanceof Uint8Array ? f.content : new Uint8Array(), f.name);
+            notify('success', 'DB Loaded for Formatting');
         } else {
              addLog('ERR', 'Unsupported file format. Please load a .db file.');
+             notify('error', 'Unsupported file format');
         }
     }
   }));
@@ -58,32 +57,12 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) =>
           setTables(tableNames);
           setSelectedTables([tableNames[0]]);
           
-          await loadTablePreview(db, tableNames[0]);
-
           setFile({ name: fileName, content: "SQLite Binary", id: Math.random().toString() });
-          setIssues([]);
           db.close();
 
       } catch (e: any) {
           addLog('ERR', `DB Load Failed: ${e.message}`);
-          alert(`Failed to load database: ${e.message}`);
-      }
-  };
-
-  const loadTablePreview = async (db: any, table: string) => {
-      setPreviewTable(table);
-      const res = db.exec(`SELECT * FROM ${table} LIMIT 50`);
-      if (res.length === 0) {
-          setPreviewData([]);
-      } else {
-          const columns = res[0].columns;
-          const values = res[0].values;
-          const mapped = values.map((row: any[]) => {
-              const obj: any = {};
-              columns.forEach((col: string, i: number) => obj[col] = row[i]);
-              return obj;
-          });
-          setPreviewData(mapped);
+          notify('error', `DB Load Failed: ${e.message}`);
       }
   };
 
@@ -92,55 +71,22 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) =>
     if (f) {
         try {
             const buffer = await f.arrayBuffer();
-            await processDbBuffer(new Uint8Array(buffer), f.name);
+            const uint8 = new Uint8Array(buffer);
+            await processDbBuffer(uint8, f.name);
+            workspaceService.saveFile({
+                id: Math.random().toString(36).substr(2, 9),
+                name: f.name,
+                type: 'source',
+                content: uint8,
+                mimeType: 'application/vnd.sqlite3',
+                size: uint8.length,
+                createdAt: new Date(),
+                module: 'formatter'
+            }).then(() => notify('info', `Saved ${f.name} to Workspace`));
         } catch (e: any) {
             addLog('ERR', `File Read Error: ${e.message}`);
         }
     }
-  };
-
-  const checkLang = async (lang: 'English' | 'Hindi') => {
-      if (!dbBufferRef.current || selectedTables.length === 0) return;
-      
-      const newIssues: {table: string, loc: string, msg: string}[] = [];
-      addLog('FMT', `Checking language (${lang}) across ${selectedTables.length} tables...`);
-
-      // @ts-ignore
-      const SQL = await window.initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${f}` });
-      const db = new SQL.Database(dbBufferRef.current);
-
-      for (const table of selectedTables) {
-          const res = db.exec(`SELECT rowid, * FROM ${table}`);
-          if (res.length === 0) continue;
-
-          const columns = res[0].columns;
-          const targetColumns = identifyTargetColumns(table, columns);
-          
-          if (targetColumns.length === 0) continue;
-
-          res[0].values.forEach((row: any[]) => {
-              const rowData: any = {};
-              columns.forEach((c: string, i: number) => rowData[c] = row[i]);
-              
-              targetColumns.forEach(key => {
-                  const val = rowData[key];
-                  if (typeof val === 'string') {
-                      const indices = AdvancedFormatter.detectLanguageIssues(val, lang);
-                      if (indices.length > 0) {
-                          newIssues.push({ 
-                              table: table,
-                              loc: `Row ${rowData.rowid || '?'} [${key}]`, 
-                              msg: `Found ${lang === 'English' ? 'Hindi' : 'English'} chars` 
-                          });
-                      }
-                  }
-              });
-          });
-      }
-      
-      db.close();
-      setIssues(newIssues);
-      addLog('FMT', `Scan complete. Found ${newIssues.length} issues.`);
   };
 
   const handleFixTabs = async () => {
@@ -178,7 +124,13 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) =>
                       const params: any[] = [];
 
                       targetColumns.forEach(col => {
-                          const val = rowData[col];
+                          let val = rowData[col];
+                          
+                          // BINARY FIX: Decode if Uint8Array
+                          if (val && typeof val === 'object' && (val instanceof Uint8Array || Array.isArray(val))) {
+                              try { val = new TextDecoder("utf-8").decode(val instanceof Uint8Array ? val : new Uint8Array(val)); } catch (e) {}
+                          }
+
                           if (typeof val === 'string') {
                               const formatted = AdvancedFormatter.formatTabs(val);
                               if (formatted !== val) {
@@ -216,16 +168,19 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) =>
           const data = db.export();
           dbBufferRef.current = data;
           
-          // Refresh preview
-          if (selectedTables.includes(previewTable)) {
-             await loadTablePreview(db, previewTable);
-          }
           db.close();
           
           addLog('FMT', `Operation Complete. Total rows updated: ${totalFixed}. Export DB to save.`);
+          
+          if (totalFixed === 0) {
+              notify('info', 'No Tab Issues Found');
+          } else {
+              notify('success', `Formatting Completed: ${totalFixed} rows fixed`);
+          }
       
       } catch (e: any) {
           addLog('ERR', `Fix Tabs Failed: ${e.message}`);
+          notify('error', e.message);
       }
       setIsProcessing(false);
   };
@@ -244,48 +199,18 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) =>
         module: 'formatter'
       });
       addLog('FMT', `Saved ${saveName} to Workspace`);
-  };
-
-  const renderTable = () => {
-      if (previewData.length === 0) return <div className="p-8 text-center text-slate-400 text-xs">Select a table to preview data</div>;
-      const columns = Object.keys(previewData[0]);
-      const targetColumns = identifyTargetColumns(previewTable, columns);
-
-      return (
-          <div className="overflow-auto border rounded-xl border-slate-200 shadow-sm bg-white h-full">
-              <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 font-bold text-slate-600 sticky top-0 shadow-sm z-10">
-                      <tr>
-                          {columns.slice(0,8).map(c => (
-                             <th key={c} className={`p-3 border-b border-slate-200 uppercase tracking-wider text-[11px] ${targetColumns.includes(c) ? 'bg-primary-50 text-primary-700' : ''}`}>
-                                 {c}
-                             </th>
-                          ))}
-                          {columns.length > 8 && <th className="p-3 border-b border-slate-200">...</th>}
-                      </tr>
-                  </thead>
-                  <tbody className="bg-white font-mono text-[11px] text-slate-700">
-                      {previewData.slice(0, 50).map((r, i) => (
-                          <tr key={i} className="border-b border-slate-100 hover:bg-primary-50/30 transition-colors">
-                              {columns.slice(0,8).map(c => <td key={c} className="p-3 truncate max-w-[200px] border-r border-slate-50" title={JSON.stringify(r[c])}>{String(r[c])}</td>)}
-                              {columns.length > 8 && <td className="p-3 text-slate-400">...</td>}
-                          </tr>
-                      ))}
-                  </tbody>
-              </table>
-          </div>
-      );
+      notify('success', 'Database Saved to Workspace');
   };
 
   return (
      <div className="flex flex-col h-full bg-white">
-        <div className="px-8 py-4 border-b border-slate-200 flex justify-between items-center bg-white shadow-sm z-30 relative">
+        <div className="px-4 py-2 border-b border-slate-200 flex justify-between items-center bg-white shadow-sm z-30 relative h-12">
            <div className="flex items-center gap-6">
               <div className="flex flex-col">
-                  <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wide">Database Formatter</h2>
-                  <span className="text-[10px] text-slate-500">Validate SQLite Datasets</span>
+                  <h2 className="text-[11px] font-bold text-slate-800 uppercase tracking-wide">Tab Formatting</h2>
+                  {file && <span className="text-[9px] text-slate-500 truncate max-w-[150px] font-medium" title={file.name}>{file.name}</span>}
               </div>
-              <div className="h-8 w-px bg-slate-200"></div>
+              <div className="h-6 w-px bg-slate-200"></div>
               {file && (
                  <div className="flex items-center gap-4">
                      <TableSelector 
@@ -293,46 +218,23 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) =>
                         selectedTables={selectedTables} 
                         onChange={setSelectedTables} 
                      />
-                     <div className="h-6 w-px bg-slate-300 mx-1"></div>
+                     <div className="h-5 w-px bg-slate-300 mx-1"></div>
                      <div className="flex items-center gap-2">
-                        <Button size="sm" variant="secondary" onClick={handleFixTabs} isLoading={isProcessing} disabled={isProcessing}>
-                            <AlignLeft className="w-4 h-4 mr-1 text-primary-600"/> Fix Tabs
+                        <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={handleFixTabs} isLoading={isProcessing} disabled={isProcessing}>
+                            <AlignLeft className="w-3.5 h-3.5 mr-1 text-primary-600"/> Fix Tabs
                         </Button>
-                        <div className="h-4 w-px bg-slate-200 mx-1"></div>
-                        <Button size="sm" variant="secondary" onClick={() => checkLang('English')}><AlertCircle className="w-4 h-4 mr-1"/> Scan Hindi</Button>
-                        <Button size="sm" variant="secondary" onClick={() => checkLang('Hindi')}><AlertCircle className="w-4 h-4 mr-1"/> Scan English</Button>
                      </div>
                  </div>
               )}
            </div>
            {file && (
-              <Button onClick={handleExportDB} size="sm" className="bg-green-600 hover:bg-green-700 text-white border-green-600 shadow-sm">
-                  <Save className="w-4 h-4 mr-2" /> Save DB
+              <Button onClick={handleExportDB} size="sm" className="bg-green-600 hover:bg-green-700 text-white border-green-600 shadow-sm h-7 text-xs">
+                  <Save className="w-3.5 h-3.5 mr-2" /> Save DB
               </Button>
            )}
         </div>
         
         <div className="flex-1 overflow-hidden flex flex-col relative bg-slate-50 p-6">
-           {issues.length > 0 && (
-               <div className="mb-4 h-48 shrink-0 bg-red-50 border border-red-200 rounded-xl overflow-hidden flex flex-col shadow-sm">
-                  <div className="px-4 py-2 bg-red-100/50 border-b border-red-200 flex justify-between items-center">
-                      <h4 className="text-xs font-bold text-red-700 flex items-center gap-2">
-                          <AlertCircle className="w-4 h-4"/> Validation Issues ({issues.length})
-                      </h4>
-                      <button onClick={() => setIssues([])} className="text-[10px] text-red-600 hover:text-red-800 font-bold hover:underline">Dismiss</button>
-                  </div>
-                  <div className="flex-1 overflow-y-auto p-4 space-y-1">
-                      {issues.map((err, i) => (
-                          <div key={i} className="text-[11px] font-mono text-red-800 flex gap-4 border-b border-red-100 last:border-0 pb-1 last:pb-0">
-                              <span className="w-24 font-bold shrink-0 text-slate-500">{err.table}</span>
-                              <span className="w-32 font-bold shrink-0">{err.loc}</span>
-                              <span>{err.msg}</span>
-                          </div>
-                      ))}
-                  </div>
-               </div>
-           )}
-
            {!file ? (
                <div className="flex-1 flex flex-col items-center justify-center max-w-xl mx-auto w-full">
                    <div className="w-full">
@@ -360,18 +262,97 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog }, ref) =>
                    </div>
                </div>
            ) : (
-               <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-                   <div className="p-3 border-b border-slate-200 flex justify-between items-center bg-slate-50/50">
-                       <span className="text-xs font-bold text-slate-700 flex items-center gap-2">
-                           <Database className="w-4 h-4 text-blue-500" />
-                           Preview: {previewTable}
-                       </span>
-                       <button onClick={() => { setFile(null); setPreviewData([]); setTables([]); setIssues([]); dbBufferRef.current = null; }} className="text-[11px] text-red-500 hover:text-red-700 hover:bg-red-50 px-3 py-1 rounded font-bold transition-colors">Close File</button>
-                   </div>
-                   <div className="flex-1 overflow-hidden p-6 bg-slate-50">
-                       {renderTable()}
-                   </div>
-               </div>
+                <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                    {/* Top Info */}
+                    <div className="bg-slate-50 border-b border-slate-200 p-4 flex justify-between items-center">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-white border border-slate-200 rounded-lg shadow-sm">
+                                <Database className="w-5 h-5 text-blue-500" />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold text-slate-800">{file.name}</h3>
+                                <p className="text-[10px] text-slate-500">SQLite Database • {((dbBufferRef.current?.length || 0) / 1024 / 1024).toFixed(2)} MB</p>
+                            </div>
+                        </div>
+                        <div className="flex gap-4 text-right">
+                            <div>
+                                <div className="text-xs font-bold text-slate-700">{tables.length}</div>
+                                <div className="text-[9px] text-slate-500 uppercase tracking-wider">Total Tables</div>
+                            </div>
+                            <div>
+                                <div className="text-xs font-bold text-primary-600">{selectedTables.length}</div>
+                                <div className="text-[9px] text-slate-500 uppercase tracking-wider">Targeted</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 p-6 flex gap-6 overflow-hidden">
+                        {/* Left: Rules Info */}
+                        <div className="flex-1 flex flex-col gap-4">
+                            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                                <AlignLeft className="w-4 h-4" /> Formatting Rules
+                            </h4>
+                            <div className="grid grid-cols-1 gap-3">
+                                <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex gap-3">
+                                    <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-primary-500 shrink-0"></div>
+                                    <div>
+                                        <p className="text-xs font-bold text-slate-700">Paragraph Indentation</p>
+                                        <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
+                                            Automatically adds a tab character (<code>\t</code>) to the beginning of any cell content that contains <strong>5 or more words</strong>.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex gap-3">
+                                    <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0"></div>
+                                    <div>
+                                        <p className="text-xs font-bold text-slate-700">Preservation Logic</p>
+                                        <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
+                                            Skips indentation if the line ends with a colon (<code>:</code>) or already starts with whitespace, preserving existing lists and headers.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex gap-3">
+                                    <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-red-500 shrink-0"></div>
+                                    <div>
+                                        <p className="text-xs font-bold text-slate-700">Cleanup</p>
+                                        <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
+                                            Removes literal escaped characters like <code>\t</code> or <code>/t</code> that may have been typed manually.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Right: Table List */}
+                        <div className="w-1/3 flex flex-col bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
+                            <div className="px-3 py-2 border-b border-slate-200 bg-white flex justify-between items-center">
+                                <span className="text-[10px] font-bold text-slate-500 uppercase">Selected Tables</span>
+                                <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full">{selectedTables.length}</span>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                                {selectedTables.length > 0 ? selectedTables.map(t => (
+                                    <div key={t} className="flex items-center gap-2 px-2 py-1.5 bg-white border border-slate-100 rounded shadow-sm">
+                                        <div className="w-1 h-1 rounded-full bg-green-500"></div>
+                                        <span className="text-[10px] font-medium text-slate-700 truncate" title={t}>{t}</span>
+                                    </div>
+                                )) : (
+                                    <div className="h-full flex items-center justify-center text-[10px] text-slate-400 italic">
+                                        Select tables from the toolbar
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="bg-slate-50 border-t border-slate-200 px-4 py-2 flex justify-between items-center">
+                        <span className="text-[10px] text-slate-400">
+                            Click "Fix Tabs" in the toolbar to apply changes.
+                        </span>
+                        <button onClick={() => { setFile(null); setTables([]); dbBufferRef.current = null; }} className="text-xs font-bold text-red-500 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded transition-colors">
+                            Close File
+                        </button>
+                    </div>
+                </div>
            )}
         </div>
      </div>
