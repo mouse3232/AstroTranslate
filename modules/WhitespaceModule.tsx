@@ -416,7 +416,7 @@ export const WhitespaceModule = React.forwardRef<any, Props>(({ addLog, notify }
                                 <div>
                                     <p className="text-xs font-bold text-slate-700">Excess Whitespace</p>
                                     <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
-                                        Detects text containing <strong>3 or more</strong> consecutive spaces. Useful for finding formatting errors in text columns.
+                                        Detects text containing <strong>3 or more</strong> consecutive spaces between words. Ignores indentation and trailing spaces.
                                     </p>
                                 </div>
                             </div>

@@ -115,15 +115,18 @@ export class AdvancedFormatter {
 
   /**
    * WHITESPACE LOGIC
-   * 3+ Spaces
+   * 3+ Spaces between words (ignores leading/trailing/line-end spaces)
    */
   static formatWhitespace(text: string): string {
-      return text.replace(/[ ]{3,}/g, ' '); 
+      // Matches a non-whitespace char, followed by 3+ spaces, followed by a non-whitespace char (lookahead)
+      // Replaces with the character and a single space.
+      return text.replace(/(\S)[ ]{3,}(?=\S)/g, '$1 '); 
   }
 
   static getWhitespaceIssues(text: string): { snippet: string }[] {
       const issues: { snippet: string }[] = [];
-      const regex = /[ ]{3,}/g;
+      // Regex to find 3+ spaces between non-whitespace characters
+      const regex = /(\S)([ ]{3,})(?=\S)/g;
       let match;
       while ((match = regex.exec(text)) !== null) {
           issues.push({
@@ -135,7 +138,8 @@ export class AdvancedFormatter {
   
   // Compat
   static checkWhitespaceIssues(text: string): RegExpMatchArray | null {
-      return text.match(/[ ]{3,}/g);
+      // Only returns matches strictly between words now
+      return text.match(/(\S)[ ]{3,}(?=\S)/g);
   }
 
   /**
