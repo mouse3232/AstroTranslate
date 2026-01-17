@@ -124,7 +124,14 @@ export const PredictionsModule = React.forwardRef<any, Props>(({ customApiKey, a
     const smartBatcher = new SmartBatchService(customApiKey);
     
     // Determine effective target language
-    const effectiveLang = selectedLang === TargetLanguage.Other ? customLang : selectedLang;
+    // If Rewrite mode is active, we force effectiveLang to 'Rewritten' to:
+    // 1. Avoid needing a language selection in UI
+    // 2. Ensure output filenames clearly indicate they are rewritten, not translated to Hindi (default)
+    let effectiveLang = selectedLang === TargetLanguage.Other ? customLang : selectedLang;
+    if (mode === 'rewrite') {
+        effectiveLang = 'Rewritten';
+    }
+
     if (!effectiveLang.trim()) {
         addLog('ERR', 'Please select or enter a target language.');
         notify('error', 'Target language required');
@@ -208,7 +215,8 @@ export const PredictionsModule = React.forwardRef<any, Props>(({ customApiKey, a
     setStatus('idle');
   };
 
-  const effectiveOutputLang = selectedLang === TargetLanguage.Other ? customLang : selectedLang;
+  // UI Helper to find correct output key
+  const effectiveOutputLang = mode === 'rewrite' ? 'Rewritten' : (selectedLang === TargetLanguage.Other ? customLang : selectedLang);
   const activeOutput = outputs[`${activeFileId}_${effectiveOutputLang}`] || '';
 
   return (
@@ -217,29 +225,34 @@ export const PredictionsModule = React.forwardRef<any, Props>(({ customApiKey, a
         <div className="flex gap-2 items-center flex-wrap">
            <ModeButton isActive={mode === 'translate'} onClick={() => setMode('translate')} icon={<Languages className="w-3.5 h-3.5"/>} label="Translate" />
            <ModeButton isActive={mode === 'rewrite'} onClick={() => setMode('rewrite')} icon={<RefreshCw className="w-3.5 h-3.5"/>} label="Rewrite" />
+           
            <div className="h-5 w-px bg-slate-200 hidden md:block"></div>
            
-           {/* Language Selector */}
-           <div className="flex items-center gap-1.5">
-             <select 
-               value={selectedLang} 
-               onChange={e => setSelectedLang(e.target.value)} 
-               className="h-7 bg-white border border-slate-200 text-slate-700 text-[10px] font-bold rounded-md focus:ring-primary-500 focus:border-primary-500 block px-1 outline-none shadow-sm"
-             >
-                {LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
-             </select>
-             {selectedLang === TargetLanguage.Other && (
-               <input 
-                 type="text" 
-                 placeholder="Language..." 
-                 value={customLang}
-                 onChange={e => setCustomLang(e.target.value)}
-                 className="h-7 w-20 px-2 text-[10px] border border-slate-300 rounded-md focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 bg-white text-slate-900 font-bold placeholder-slate-400"
-               />
-             )}
-           </div>
+           {/* Language Selector - Conditionally Rendered */}
+           {mode === 'translate' && (
+             <>
+               <div className="flex items-center gap-1.5 animate-in fade-in duration-300">
+                 <select 
+                   value={selectedLang} 
+                   onChange={e => setSelectedLang(e.target.value)} 
+                   className="h-7 bg-white border border-slate-200 text-slate-700 text-[10px] font-bold rounded-md focus:ring-primary-500 focus:border-primary-500 block px-1 outline-none shadow-sm"
+                 >
+                    {LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+                 </select>
+                 {selectedLang === TargetLanguage.Other && (
+                   <input 
+                     type="text" 
+                     placeholder="Language..." 
+                     value={customLang}
+                     onChange={e => setCustomLang(e.target.value)}
+                     className="h-7 w-20 px-2 text-[10px] border border-slate-300 rounded-md focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 bg-white text-slate-900 font-bold placeholder-slate-400"
+                   />
+                 )}
+               </div>
+               <div className="h-5 w-px bg-slate-200 hidden md:block"></div>
+             </>
+           )}
 
-           <div className="h-5 w-px bg-slate-200 hidden md:block"></div>
            <OptionToggle active={dualSexMode} onClick={() => setDualSexMode(!dualSexMode)} icon={<Split className="w-3.5 h-3.5"/>} label="Dual Sex" />
            {mode !== 'rewrite' && (
               <>

@@ -1,96 +1,187 @@
 
 export class AdvancedFormatter {
+  
   /**
-   * Enforces tab rules:
-   * 1. Remove literal '/t' and '\t' anywhere in text.
-   * 2. Ensure every non-empty line starts with a real tab character IF it has 5 or more words.
-   * 3. If line already starts with tab, do nothing.
-   * 4. If line ends with ':', do nothing.
+   * Helper: Extracts a snippet with surrounding context (before/after).
    */
+  private static getSnippet(text: string, index: number, length: number = 1): string {
+      const start = Math.max(0, index - 15);
+      const end = Math.min(text.length, index + length + 15);
+      let snippet = text.substring(start, end).replace(/\n/g, '↵');
+      if (start > 0) snippet = '...' + snippet;
+      if (end < text.length) snippet = snippet + '...';
+      return snippet;
+  }
+
+  /**
+   * PUNCTUATION LOGIC
+   * 1. No space before full-stop (.) or comma (,).
+   * 2. Exactly one space after full-stop (.) or comma (,), unless it's end of line.
+   */
+  static formatPunctuation(text: string): string {
+    if (!text) return text;
+    let processed = text;
+
+    // 1. Remove space before dot/comma
+    // "Hello ." -> "Hello."
+    processed = processed.replace(/\s+([.,])/g, '$1');
+
+    // 2. Ensure exactly one space after dot/comma IF followed by non-whitespace
+    // "Hello.World" -> "Hello. World"
+    processed = processed.replace(/([.,])(?=[^\s])/g, '$1 ');
+
+    return processed;
+  }
+
+  static getPunctuationIssues(text: string): { type: string, index: number, snippet: string }[] {
+      const issues: { type: string, index: number, snippet: string }[] = [];
+      if (!text) return issues;
+
+      // Check space before: /\s+[.,]/
+      const spaceBeforeRegex = /\s+([.,])/g;
+      let match;
+      while ((match = spaceBeforeRegex.exec(text)) !== null) {
+          issues.push({
+              type: 'Space Before',
+              index: match.index,
+              snippet: AdvancedFormatter.getSnippet(text, match.index, match[0].length)
+          });
+      }
+
+      // Check no space after: /[.,][^\s]/
+      // Note: We use positive lookahead in fix, here we match explicitly to get index
+      const noSpaceAfterRegex = /([.,])([^\s])/g;
+      while ((match = noSpaceAfterRegex.exec(text)) !== null) {
+          issues.push({
+              type: 'No Space After',
+              index: match.index,
+              snippet: AdvancedFormatter.getSnippet(text, match.index, 2)
+          });
+      }
+
+      return issues;
+  }
+
+  /**
+   * TABS LOGIC
+   * Replaces the boolean check with a detailed scan returning snippets.
+   */
+  static getTabIssues(text: string): { snippet: string }[] {
+      if (!text) return [];
+      const issues: { snippet: string }[] = [];
+
+      // Check for literal tabs to remove
+      if (/\\t|\/t/.test(text)) {
+           // Find location
+           const idx = text.search(/\\t|\/t/);
+           issues.push({ snippet: AdvancedFormatter.getSnippet(text, idx, 2) });
+      }
+      
+      const lines = text.split('\n');
+      for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.length === 0) continue;
+          if (line.startsWith('\t')) continue; 
+          if (trimmed.endsWith(':')) continue; 
+          
+          const wordCount = trimmed.split(/\s+/).length;
+          if (wordCount >= 5) {
+              // This line needs a tab but lacks it.
+              // Snippet is the start of the line
+              issues.push({ snippet: `[START] ${trimmed.substring(0, 40)}...` });
+          }
+      }
+      return issues;
+  }
+
+  // Preserve original boolean method for backward compat if needed, or redirect
+  static checkTabsNeeded(text: string): boolean {
+     return AdvancedFormatter.getTabIssues(text).length > 0;
+  }
+
   static formatTabs(text: string): string {
     if (!text) return text;
-    
-    // c) Remove literal escaped tab characters users might have typed
     const cleaned = text.replace(/\\t|\/t/g, '');
-    
     return cleaned.split('\n').map(line => {
         const trimmed = line.trim();
-        
-        // Skip empty lines
         if (trimmed.length === 0) return line;
-        
-        // b) If line already starts with tab, do nothing (preserve existing indentation)
-        if (line.startsWith('\t')) {
-            return line;
-        }
-
-        // d) Do not add tab in sentences ends with colon ':'
-        if (trimmed.endsWith(':')) {
-            return line;
-        }
-
-        // a) Put tab at start of every line if it has 5 or more words.
+        if (line.startsWith('\t')) return line;
+        if (trimmed.endsWith(':')) return line;
         const wordCount = trimmed.split(/\s+/).length;
-        if (wordCount >= 5) {
-            return '\t' + line;
-        }
-
-        // Default: return original line (no tab added if < 5 words and no existing tab)
+        if (wordCount >= 5) return '\t' + line;
         return line;
     }).join('\n');
   }
 
   /**
-   * Detects language contamination.
-   * Returns an array of line indices (0-based) that violate the rule.
+   * WHITESPACE LOGIC
+   * 3+ Spaces
    */
-  static detectLanguageIssues(text: string, expectedLang: 'English' | 'Hindi'): number[] {
-    const lines = text.split('\n');
-    const issues: number[] = [];
-    
-    // Hindi Unicode Range: \u0900-\u097F
-    const hindiRegex = /[\u0900-\u097F]+/;
-    // English Alpha Range: [a-zA-Z]+
-    const englishRegex = /[a-zA-Z]+/;
+  static formatWhitespace(text: string): string {
+      return text.replace(/[ ]{3,}/g, ' '); 
+  }
 
-    lines.forEach((line, index) => {
-        // Ignore lines that are just numbers or symbols
-        const content = line.trim();
-        if (!content) return;
-
-        if (expectedLang === 'Hindi') {
-            // A Hindi file should NOT contain English words
-            // We ignore tags like <Var> or simple variables if possible, but strict check for now
-            // Removing common variable patterns before checking
-            const cleanLine = content.replace(/<[^>]+>/g, '').replace(/%[a-zA-Z]/g, '');
-            if (englishRegex.test(cleanLine)) {
-                issues.push(index);
-            }
-        } else {
-            // English file should NOT contain Hindi characters
-            if (hindiRegex.test(content)) {
-                issues.push(index);
-            }
-        }
-    });
-
-    return issues;
+  static getWhitespaceIssues(text: string): { snippet: string }[] {
+      const issues: { snippet: string }[] = [];
+      const regex = /[ ]{3,}/g;
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+          issues.push({
+              snippet: AdvancedFormatter.getSnippet(text, match.index, match[0].length)
+          });
+      }
+      return issues;
+  }
+  
+  // Compat
+  static checkWhitespaceIssues(text: string): RegExpMatchArray | null {
+      return text.match(/[ ]{3,}/g);
   }
 
   /**
-   * Custom check for specific patterns
+   * LINE SPACING LOGIC
    */
-  static customCheck(text: string, regexPattern: string): number[] {
-    try {
-        const regex = new RegExp(regexPattern);
-        const lines = text.split('\n');
-        const matches: number[] = [];
-        lines.forEach((line, i) => {
-            if (regex.test(line)) matches.push(i);
-        });
-        return matches;
-    } catch (e) {
-        return [];
-    }
+  static formatLineSpacing(text: string): string {
+      if (!text) return text;
+      let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      normalized = normalized.replace(/[ \t]+$/gm, '');
+      normalized = normalized.replace(/\n{3,}/g, '\n\n');
+      return normalized;
+  }
+
+  static getLineSpacingIssues(text: string): { type: string, snippet: string }[] {
+      const issues: { type: string, snippet: string }[] = [];
+      if (!text) return issues;
+      
+      const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+      // 1. Excessive newlines
+      let match;
+      const nlRegex = /\n{3,}/g;
+      while ((match = nlRegex.exec(normalized)) !== null) {
+          issues.push({ 
+              type: 'Excessive Newlines',
+              snippet: '...[↵↵↵]...' 
+          });
+      }
+
+      // 2. Trailing spaces (multiline)
+      // We iterate lines to find indices of trailing spaces
+      const trailingRegex = /[ \t]+$/gm;
+      while ((match = trailingRegex.exec(normalized)) !== null) {
+           issues.push({
+               type: 'Trailing Space',
+               snippet: AdvancedFormatter.getSnippet(normalized, match.index, match[0].length)
+           });
+      }
+
+      return issues;
+  }
+
+  // Compat
+  static checkLineSpacingNeeded(text: string): boolean {
+      if (!text) return false;
+      const formatted = AdvancedFormatter.formatLineSpacing(text);
+      return formatted !== text;
   }
 }

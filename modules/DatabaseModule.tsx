@@ -206,6 +206,28 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
     }
   };
 
+  const handleTargetSelect = async () => {
+      const isDesktop = await workspaceService.isTauri();
+      if (isDesktop) {
+          const result = await workspaceService.pickFile(['db', 'sqlite', 'sqlite3']);
+          if (result) {
+               await loadTargetDb(result.content, result.name);
+               workspaceService.saveFile({
+                id: Math.random().toString(36).substr(2, 9),
+                name: result.name,
+                type: 'source',
+                content: result.content,
+                mimeType: 'application/vnd.sqlite3',
+                size: result.content.length,
+                createdAt: new Date(),
+                module: 'database'
+            }).then(() => notify('info', `Linked Target ${result.name}`));
+          }
+      } else {
+          targetInputRef.current?.click();
+      }
+  };
+
   // Mutually Exclusive Toggles
   const toggleShloka = () => {
     if (!shlokaMode) setSanskritMode(false);
@@ -259,7 +281,7 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
             setCurrentProcessingTable(tableName);
             
             // 1. Fetch ALL Data from Source
-            const res = sourceDb.exec(`SELECT rowid as _row_id_, * FROM ${tableName}`);
+            const res = sourceDb.exec(`SELECT rowid as _row_id_, * FROM "${tableName}"`);
             if (res.length === 0) {
                 addLog('WARN', `Table ${tableName} is empty. Skipping.`);
                 continue;
@@ -287,21 +309,66 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                 continue;
             }
 
-            // 3. Prepare Batches
-            const batchItems = tableRows.map((d: any, i: number) => {
-                const filteredData: any = {};
-                targetColumns.forEach(col => filteredData[col] = d[col]);
-                if (d.sex !== undefined) filteredData.sex = d.sex;
-                return { rowid: d._row_id_, data: filteredData };
-            });
+            // DUAL SEX PREPARATION
+            if (dualSexMode) {
+                try {
+                     writableDb.exec(`ALTER TABLE "${tableName}" ADD COLUMN Sex INTEGER DEFAULT 0`);
+                } catch(e) { /* Ignore if exists */ }
+                
+                // Truncate table in destination to prepare for expanded insertion
+                writableDb.exec(`DELETE FROM "${tableName}"`);
+            }
 
-            addLog('DB', `Processing ${tableName}: ${batchItems.length} rows, Cols: [${targetColumns.join(', ')}]`);
+            // 3. Prepare Batches
+            let batchItems: any[] = [];
+            
+            if (dualSexMode) {
+                let synId = 1;
+                batchItems = tableRows.flatMap((row: any) => {
+                     const filterData = (sex: number) => {
+                         const d: any = {};
+                         targetColumns.forEach(c => d[c] = row[c]);
+                         d.sex = sex;
+                         return d;
+                     };
+                     
+                     return [
+                         { 
+                             rowid: synId++, // Synthetic ID for Gemini tracking
+                             data: filterData(0), // Translatables
+                             fullRow: row, // Full Data for Insert
+                             targetSex: 0 
+                         },
+                         { 
+                             rowid: synId++, 
+                             data: filterData(1),
+                             fullRow: row,
+                             targetSex: 1
+                         }
+                     ];
+                });
+            } else {
+                batchItems = tableRows.map((d: any) => {
+                    const filteredData: any = {};
+                    targetColumns.forEach(col => filteredData[col] = d[col]);
+                    if (d.sex !== undefined) filteredData.sex = d.sex;
+                    return { rowid: d._row_id_, data: filteredData };
+                });
+            }
+
+            addLog('DB', `Processing ${tableName}: ${batchItems.length} items (Dual Mode: ${dualSexMode})`);
 
             // 4. Translate
             const resultMap = new Map<number, any>();
             await processBatchQueue(batchItems, 50, async (batch, _, retry) => {
+                 // Convert to pure Gemini Format (remove extra metadata like fullRow)
+                 const serviceItems = batch.map((b: any) => ({
+                     rowid: b.rowid,
+                     data: b.data
+                 }));
+
                  const res = await gemini.translateDatabaseBatch(
-                     batch as DBBatchItem[], 
+                     serviceItems as DBBatchItem[], 
                      effectiveLang, 
                      'translate',
                      { transliterate: shlokaMode, keepSanskrit: sanskritMode }
@@ -311,26 +378,57 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
 
             if (stopRef.current) break;
 
-            // 5. Update Writable DB
-            addLog('DB', `Updating Database table: ${tableName}...`);
+            // 5. Update DB
+            addLog('DB', `Writing changes to ${tableName}...`);
             writableDb.exec("BEGIN TRANSACTION;");
             try {
-                resultMap.forEach((translatedData, rowid) => {
-                     const updates: string[] = [];
-                     const params: any[] = [];
-                     
-                     Object.keys(translatedData).forEach(col => {
-                         if (col !== 'sex') {
-                             updates.push(`${col} = ?`);
-                             params.push(translatedData[col]);
+                if (dualSexMode) {
+                    // INSERT STRATEGY
+                    const insertCols = [...columns.filter(c => c !== '_row_id_')];
+                    // Ensure Sex is in the insert list
+                    if (!insertCols.some(c => c.toLowerCase() === 'sex')) {
+                        insertCols.push('Sex');
+                    }
+                    
+                    const placeholders = insertCols.map(() => '?').join(', ');
+                    // Quote columns to be safe
+                    const colNames = insertCols.map(c => `"${c}"`).join(', ');
+                    
+                    batchItems.forEach((item: any) => {
+                        const translated = resultMap.get(item.rowid) || item.data;
+                        const finalRow = { ...item.fullRow };
+                        
+                        // Apply Translations
+                        Object.keys(translated).forEach(k => {
+                            if (k !== 'sex') finalRow[k] = translated[k];
+                        });
+                        
+                        // Enforce Sex
+                        finalRow['Sex'] = item.targetSex;
+                        finalRow['sex'] = item.targetSex;
+
+                        const params = insertCols.map(c => finalRow[c]);
+                        writableDb.run(`INSERT INTO "${tableName}" (${colNames}) VALUES (${placeholders})`, params);
+                    });
+                } else {
+                    // UPDATE STRATEGY
+                    resultMap.forEach((translatedData, rowid) => {
+                         const updates: string[] = [];
+                         const params: any[] = [];
+                         
+                         Object.keys(translatedData).forEach(col => {
+                             if (col !== 'sex') {
+                                 updates.push(`"${col}" = ?`);
+                                 params.push(translatedData[col]);
+                             }
+                         });
+                         
+                         if (updates.length > 0) {
+                             params.push(rowid);
+                             writableDb.run(`UPDATE "${tableName}" SET ${updates.join(', ')} WHERE rowid = ?`, params);
                          }
-                     });
-                     
-                     if (updates.length > 0) {
-                         params.push(rowid);
-                         writableDb.run(`UPDATE ${tableName} SET ${updates.join(', ')} WHERE rowid = ?`, params);
-                     }
-                });
+                    });
+                }
                 writableDb.exec("COMMIT;");
             } catch (e: any) {
                 writableDb.exec("ROLLBACK;");
@@ -400,7 +498,7 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                         <div className="h-5 w-px bg-slate-300 mx-1"></div>
                         <div className="flex items-center gap-1.5">
                             <OptionToggle active={dualSexMode} onClick={() => setDualSexMode(!dualSexMode)} icon={<Split className="w-3.5 h-3.5"/>} label="Dual Sex" />
-                            <OptionToggle active={shlokaMode} onClick={toggleShloka} icon={<Wand2 className="w-3.5 h-3.5"/>} label="Transl" />
+                            <OptionToggle active={shlokaMode} onClick={toggleShloka} icon={<Wand2 className="w-3.5 h-3.5"/>} label="Transliteration" />
                             <OptionToggle active={sanskritMode} onClick={toggleSanskrit} icon={<Scroll className="w-3.5 h-3.5"/>} label="Sanskrit" />
                         </div>
                     </div>
@@ -490,7 +588,7 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                                 ) : (
                                    <div className="flex items-center gap-2">
                                        <input type="file" ref={targetInputRef} onChange={handleTargetChange} accept=".db,.sqlite" className="hidden" />
-                                       <button onClick={() => targetInputRef.current?.click()} className="w-full text-xs flex items-center justify-center gap-2 bg-white hover:bg-slate-50 border border-dashed border-slate-300 text-slate-500 px-4 py-3 rounded transition-all hover:border-slate-400 hover:text-slate-700">
+                                       <button onClick={handleTargetSelect} className="w-full text-xs flex items-center justify-center gap-2 bg-white hover:bg-slate-50 border border-dashed border-slate-300 text-slate-500 px-4 py-3 rounded transition-all hover:border-slate-400 hover:text-slate-700">
                                            <Upload className="w-4 h-4" /> Click to Select Target .db to Overwrite
                                        </button>
                                    </div>
@@ -528,7 +626,7 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                                             <div>
                                                 <p className="text-xs font-bold text-blue-700">Dual Sex Mode Active</p>
                                                 <p className="text-[10px] text-blue-600 leading-relaxed mt-0.5">
-                                                    Will attempt to generate gender-specific variations if the table structure supports it.
+                                                    Will create 2 rows for every source row (Male/Female) and add 'Sex' column if missing.
                                                 </p>
                                             </div>
                                         </div>
@@ -560,7 +658,7 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                     
                     <div className="bg-slate-50 border-t border-slate-200 px-4 py-2 flex justify-between items-center">
                         <span className="text-[10px] text-slate-400">
-                             {targetFile ? 'Overwrite mode enabled.' : 'Clone mode enabled.'}
+                            {targetFile ? 'Overwrite mode enabled.' : 'Clone mode enabled.'}
                         </span>
                         <button onClick={() => { setFile(null); setTables([]); dbBufferRef.current = null; }} className="text-xs font-bold text-red-500 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded transition-colors">
                             Close Database
@@ -568,7 +666,7 @@ export const DatabaseModule = React.forwardRef<any, Props>(({ customApiKey, addL
                     </div>
                 </div>
            )}
-       </div>
+        </div>
        {status === 'processing' && (
            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-8">
                <div className="w-full max-w-md bg-white border border-slate-200 shadow-2xl rounded-xl p-6">

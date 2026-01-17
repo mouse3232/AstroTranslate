@@ -1,6 +1,6 @@
 
 import React, { useState, useImperativeHandle, useRef } from 'react';
-import { AlignLeft, AlertCircle, Save, FileUp, Check, Database, ArrowRight, ScanEye } from 'lucide-react';
+import { AlignVerticalJustifyCenter, AlertCircle, Save, FileUp, Check, Database, ArrowRight, ScanEye, Scissors, MoveVertical } from 'lucide-react';
 import { StoredFile, FileData } from '../types';
 import { AdvancedFormatter } from '../services/advancedFormatter';
 import { Button } from '../components/Button';
@@ -21,13 +21,12 @@ interface Issue {
     snippet: string;
 }
 
-export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify }, ref) => {
+export const LineSpacingModule = React.forwardRef<any, Props>(({ addLog, notify }, ref) => {
   const [file, setFile] = useState<FileData | null>(null);
   const [tables, setTables] = useState<string[]>([]);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   
-  // State for Report/Fix workflow
   const [issues, setIssues] = useState<Issue[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
 
@@ -38,7 +37,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
     loadFile: async (f: StoredFile) => {
         if (f.content instanceof Uint8Array || typeof f.content !== 'string') {
             await processDbBuffer(f.content instanceof Uint8Array ? f.content : new Uint8Array(), f.name);
-            notify('success', 'DB Loaded for Formatting');
+            notify('success', 'DB Loaded for Line Spacing Check');
         } else {
              addLog('ERR', 'Unsupported file format. Please load a .db file.');
              notify('error', 'Unsupported file format');
@@ -48,7 +47,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
 
   const processDbBuffer = async (buffer: Uint8Array, fileName: string) => {
       try {
-          addLog('FMT', `Reading SQLite file: ${fileName}...`);
+          addLog('LSP', `Reading SQLite file: ${fileName}...`);
           dbBufferRef.current = buffer;
           
           // @ts-ignore
@@ -93,7 +92,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                 mimeType: 'application/vnd.sqlite3',
                 size: uint8.length,
                 createdAt: new Date(),
-                module: 'formatter'
+                module: 'linespacing'
             }).then(() => notify('info', `Saved ${f.name} to Workspace`));
         } catch (e: any) {
             addLog('ERR', `File Read Error: ${e.message}`);
@@ -101,12 +100,11 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
     }
   };
 
-  // 1. SCAN PHASE
-  const handleScanTabs = async () => {
+  const handleScan = async () => {
     if (!dbBufferRef.current || selectedTables.length === 0) return;
     
     setIsProcessing(true);
-    addLog('FMT', `Scanning ${selectedTables.length} tables for tab inconsistencies...`);
+    addLog('LSP', `Scanning ${selectedTables.length} tables for excessive line spacing...`);
     const newIssues: Issue[] = [];
 
     try {
@@ -129,21 +127,20 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
 
                 targetColumns.forEach(col => {
                     let val = rowData[col];
-                    // Decode if binary
                     if (val && typeof val === 'object' && (val instanceof Uint8Array || Array.isArray(val))) {
                          try { val = new TextDecoder("utf-8").decode(val instanceof Uint8Array ? val : new Uint8Array(val)); } catch (e) {}
                     }
 
                     if (typeof val === 'string') {
-                        const tabIssues = AdvancedFormatter.getTabIssues(val);
-                        if (tabIssues.length > 0) {
-                             newIssues.push({
+                        const lineIssues = AdvancedFormatter.getLineSpacingIssues(val);
+                        lineIssues.forEach(m => {
+                            newIssues.push({
                                 table,
                                 rowId,
                                 column: col,
-                                snippet: tabIssues[0].snippet // Just take first
+                                snippet: m.snippet
                             });
-                        }
+                        });
                     }
                 });
             });
@@ -151,9 +148,9 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
         db.close();
         setIssues(newIssues);
         setHasScanned(true);
-        addLog('FMT', `Scan complete. Found ${newIssues.length} rows needing formatting.`);
-        if (newIssues.length > 0) notify('info', `Found ${newIssues.length} potential formatting issues`);
-        else notify('success', 'No tab formatting issues found');
+        addLog('LSP', `Scan complete. Found ${newIssues.length} rows with spacing issues.`);
+        if (newIssues.length > 0) notify('info', `Found ${newIssues.length} spacing issues`);
+        else notify('success', 'No excessive line spacing found');
 
     } catch (e: any) {
         addLog('ERR', `Scan Failed: ${e.message}`);
@@ -162,12 +159,11 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
     setIsProcessing(false);
   };
 
-  // 2. FIX PHASE
-  const handleApplyFixes = async () => {
+  const handleFix = async () => {
       if (!dbBufferRef.current || selectedTables.length === 0) return;
       
       setIsProcessing(true);
-      addLog('FMT', `Applying fixes to ${selectedTables.length} tables...`);
+      addLog('LSP', `Fixing line spacing in ${selectedTables.length} tables...`);
 
       try {
           // @ts-ignore
@@ -204,7 +200,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                           }
 
                           if (typeof val === 'string') {
-                              const formatted = AdvancedFormatter.formatTabs(val);
+                              const formatted = AdvancedFormatter.formatLineSpacing(val);
                               if (formatted !== val) {
                                   updates.push(`"${col}" = ?`);
                                   params.push(formatted);
@@ -227,7 +223,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                   });
 
                   db.exec("COMMIT;");
-                  if (tableChanges > 0) addLog('FMT', `Fixed ${tableChanges} rows in ${table}`);
+                  if (tableChanges > 0) addLog('LSP', `Fixed ${tableChanges} rows in ${table}`);
                   totalFixed += tableChanges;
 
               } catch(e: any) {
@@ -236,20 +232,18 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
               }
           }
           
-          // Save back to buffer
           const data = db.export();
           dbBufferRef.current = data;
           db.close();
           
-          // Reset Scan state since we fixed them
           setIssues([]);
           setHasScanned(false);
 
-          addLog('FMT', `Fix Complete. Total rows updated: ${totalFixed}. Export DB to save.`);
-          notify('success', `Applied fixes to ${totalFixed} rows.`);
+          addLog('LSP', `Fix Complete. Total rows updated: ${totalFixed}. Export DB to save.`);
+          notify('success', `Fixed line spacing in ${totalFixed} rows.`);
       
       } catch (e: any) {
-          addLog('ERR', `Fix Tabs Failed: ${e.message}`);
+          addLog('ERR', `Fix Failed: ${e.message}`);
           notify('error', e.message);
       }
       setIsProcessing(false);
@@ -257,7 +251,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
 
   const handleExportDB = () => {
       if (!dbBufferRef.current || !file) return;
-      const saveName = `Formatted_${file.name}`;
+      const saveName = `SpacingFixed_${file.name}`;
       workspaceService.saveFile({
         id: Math.random().toString(),
         name: saveName,
@@ -266,13 +260,12 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
         mimeType: 'application/vnd.sqlite3',
         size: dbBufferRef.current.length,
         createdAt: new Date(),
-        module: 'formatter'
+        module: 'linespacing'
       });
-      addLog('FMT', `Saved ${saveName} to Workspace`);
+      addLog('LSP', `Saved ${saveName} to Workspace`);
       notify('success', 'Database Saved to Workspace');
   };
 
-  // Group issues by table for display
   const groupedIssues = issues.reduce((acc, issue) => {
       if (!acc[issue.table]) acc[issue.table] = [];
       acc[issue.table].push(issue);
@@ -284,7 +277,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
         <div className="px-4 py-2 border-b border-slate-200 flex justify-between items-center bg-white shadow-sm z-30 relative h-12">
            <div className="flex items-center gap-6">
               <div className="flex flex-col">
-                  <h2 className="text-[11px] font-bold text-slate-800 uppercase tracking-wide">Tab Formatting</h2>
+                  <h2 className="text-[11px] font-bold text-slate-800 uppercase tracking-wide">Line Spacing Fixer</h2>
                   {file && <span className="text-[9px] text-slate-500 truncate max-w-[150px] font-medium" title={file.name}>{file.name}</span>}
               </div>
               <div className="h-6 w-px bg-slate-200"></div>
@@ -297,9 +290,8 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                      />
                      <div className="h-5 w-px bg-slate-300 mx-1"></div>
                      <div className="flex items-center gap-2">
-                        {/* Scan Button */}
-                        <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={handleScanTabs} isLoading={isProcessing && !hasScanned} disabled={isProcessing}>
-                            <ScanEye className="w-3.5 h-3.5 mr-1 text-blue-600"/> Scan Issues
+                        <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={handleScan} isLoading={isProcessing && !hasScanned} disabled={isProcessing}>
+                            <ScanEye className="w-3.5 h-3.5 mr-1 text-slate-600"/> Check Spacing
                         </Button>
                      </div>
                  </div>
@@ -341,13 +333,13 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                </div>
            ) : hasScanned && issues.length > 0 ? (
                <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-0 min-h-0 flex flex-col h-full overflow-hidden">
-                   <div className="px-6 py-4 border-b border-indigo-100 bg-indigo-50 flex justify-between items-center shrink-0">
-                       <h2 className="text-sm font-bold text-indigo-700 flex items-center gap-2">
-                           <AlignLeft className="w-5 h-5"/> Indentation Issues ({issues.length})
+                   <div className="px-6 py-4 border-b border-orange-100 bg-orange-50 flex justify-between items-center shrink-0">
+                       <h2 className="text-sm font-bold text-orange-700 flex items-center gap-2">
+                           <AlignVerticalJustifyCenter className="w-5 h-5"/> Formatting Issues ({issues.length})
                        </h2>
                        <div className="flex items-center gap-2">
-                          <Button size="sm" onClick={handleApplyFixes} className="bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600 shadow-sm h-8 text-xs">
-                              <Check className="w-3.5 h-3.5 mr-1.5"/> Apply Fixes to {issues.length} Rows
+                          <Button size="sm" onClick={handleFix} className="bg-orange-600 hover:bg-orange-700 text-white border-orange-600 shadow-sm h-8 text-xs">
+                              <Scissors className="w-3.5 h-3.5 mr-1.5"/> Fix Spacing
                           </Button>
                           <Button variant="ghost" onClick={() => { setIssues([]); setHasScanned(false); }} className="text-slate-500 hover:bg-slate-100 h-8 text-xs">Cancel</Button>
                        </div>
@@ -356,23 +348,23 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                        {Object.keys(groupedIssues).map(tableName => (
                            <div key={tableName}>
                                <div className="flex items-center gap-2 font-bold text-slate-800 text-xs uppercase tracking-wider border-b border-slate-200 pb-2 mb-3 bg-slate-50 px-2 py-2 rounded-t">
-                                   <div className="w-2 h-2 rounded-full bg-indigo-500"></div>
+                                   <div className="w-2 h-2 rounded-full bg-orange-500"></div>
                                    TABLE: {tableName}
                                 </div>
                                <div className="space-y-3 pl-2">
                                    {groupedIssues[tableName].map((issue, i) => (
-                                       <div key={i} className="flex flex-col bg-white border border-slate-100 rounded-lg p-3 hover:border-indigo-100 hover:shadow-sm transition-all">
+                                       <div key={i} className="flex flex-col bg-white border border-slate-100 rounded-lg p-3 hover:border-orange-100 hover:shadow-sm transition-all">
                                            <div className="flex items-center gap-2 text-xs font-mono mb-2 border-b border-slate-50 pb-2">
                                                <span className="font-bold text-slate-800 px-1.5 py-0.5 bg-slate-100 rounded">Row {issue.rowId}</span>
                                                <span className="text-slate-500">Column: {issue.column}</span>
                                            </div>
                                            <div className="flex items-start gap-3 pl-2">
-                                                <div className="mt-0.5"><ArrowRight className="w-3.5 h-3.5 text-indigo-400" /></div>
+                                                <div className="mt-0.5"><ArrowRight className="w-3.5 h-3.5 text-orange-400" /></div>
                                                 <div className="flex flex-col gap-1 text-[11px]">
                                                     <span className="font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100 break-all">
                                                         "{issue.snippet}"
                                                     </span>
-                                                    <span className="text-[10px] text-orange-500 italic">Needs indentation (has ≥ 5 words)</span>
+                                                    <span className="text-[10px] text-red-500 italic">Contains trailing spaces or excessive newlines</span>
                                                 </div>
                                            </div>
                                        </div>
@@ -384,7 +376,6 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                </div>
            ) : (
                 <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-                    {/* Top Info */}
                     <div className="bg-slate-50 border-b border-slate-200 p-4 flex justify-between items-center">
                         <div className="flex items-center gap-3">
                             <div className="p-2 bg-white border border-slate-200 rounded-lg shadow-sm">
@@ -416,34 +407,30 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                     </div>
 
                     <div className="flex-1 p-6 flex gap-6 overflow-hidden">
-                        {/* Left: Rules Info */}
                         <div className="flex-1 flex flex-col gap-4">
                             <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                                <AlignLeft className="w-4 h-4" /> Formatting Rules
+                                <ScanEye className="w-4 h-4" /> Detection Rules
                             </h4>
-                            <div className="grid grid-cols-1 gap-3">
-                                <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex gap-3">
-                                    <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-primary-500 shrink-0"></div>
-                                    <div>
-                                        <p className="text-xs font-bold text-slate-700">Paragraph Indentation</p>
-                                        <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
-                                            Automatically adds a tab character (<code>\t</code>) to the beginning of any cell content that contains <strong>5 or more words</strong>.
-                                        </p>
-                                    </div>
+                            <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex gap-3">
+                                <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0"></div>
+                                <div>
+                                    <p className="text-xs font-bold text-slate-700">Excessive Newlines</p>
+                                    <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
+                                        Detects text with <strong>3 or more</strong> consecutive newlines (`\n\n\n`) and collapses them to 2 (`\n\n`).
+                                    </p>
                                 </div>
-                                <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex gap-3">
-                                    <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0"></div>
-                                    <div>
-                                        <p className="text-xs font-bold text-slate-700">Preservation Logic</p>
-                                        <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
-                                            Skips indentation if the line ends with a colon (<code>:</code>) or already starts with whitespace, preserving existing lists and headers.
-                                        </p>
-                                    </div>
+                            </div>
+                            <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex gap-3">
+                                <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></div>
+                                <div>
+                                    <p className="text-xs font-bold text-slate-700">Trailing Whitespace</p>
+                                    <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
+                                        Removes spaces or tabs at the very end of every line.
+                                    </p>
                                 </div>
                             </div>
                         </div>
 
-                        {/* Right: Table List */}
                         <div className="w-1/3 flex flex-col bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
                             <div className="px-3 py-2 border-b border-slate-200 bg-white flex justify-between items-center">
                                 <span className="text-[10px] font-bold text-slate-500 uppercase">Selected Tables</span>
@@ -452,7 +439,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                                 {selectedTables.length > 0 ? selectedTables.map(t => (
                                     <div key={t} className="flex items-center gap-2 px-2 py-1.5 bg-white border border-slate-100 rounded shadow-sm">
-                                        <div className="w-1 h-1 rounded-full bg-green-500"></div>
+                                        <div className="w-1 h-1 rounded-full bg-orange-500"></div>
                                         <span className="text-[10px] font-medium text-slate-700 truncate" title={t}>{t}</span>
                                     </div>
                                 )) : (
@@ -466,7 +453,7 @@ export const FormatterModule = React.forwardRef<any, Props>(({ addLog, notify },
                     
                     <div className="bg-slate-50 border-t border-slate-200 px-4 py-2 flex justify-between items-center">
                         <span className="text-[10px] text-slate-400">
-                            Click "Scan Issues" to check for missing tabs.
+                            Click "Check Spacing" to begin.
                         </span>
                         <button onClick={() => { setFile(null); setTables([]); dbBufferRef.current = null; }} className="text-xs font-bold text-red-500 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded transition-colors">
                             Close File

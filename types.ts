@@ -97,7 +97,8 @@ export interface StoredFile {
   mimeType: string;
   size: number;
   createdAt: Date;
-  module: 'predictions' | 'resources' | 'database' | 'formatter' | 'charcheck';
+  // Added 'whitespace', 'linespacing', 'punctuation' to the union type
+  module: 'predictions' | 'resources' | 'database' | 'formatter' | 'charcheck' | 'whitespace' | 'linespacing' | 'punctuation';
 }
 
 export interface FileData {

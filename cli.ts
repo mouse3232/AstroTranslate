@@ -51,7 +51,7 @@ const generateFileName = (originalName: string, lang: string) => {
 };
 
 async function main() {
-  console.log("\x1b[36m%s\x1b[0m", "--- AstroLocalize CLI ---");
+  console.log("\x1b[36m%s\x1b[0m", "--- AstroTranslate CLI ---");
   console.log(`Mode: ${mode.toUpperCase()}`);
   console.log(`Dual Sex: ${dualSexMode}`);
   

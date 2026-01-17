@@ -20,6 +20,7 @@ export const WorkspaceDrawer: React.FC<WorkspaceDrawerProps> = ({ isOpen, onClos
   const [customUrl, setCustomUrl] = useState(workspaceService.getApiUrl());
   const [isLoading, setIsLoading] = useState(false);
   const [loadingFileId, setLoadingFileId] = useState<string | null>(null);
+  const [isTauri, setIsTauri] = useState(false);
 
   // Helper to safely get the current effective URL for display
   const getCurrentEffectiveUrl = () => {
@@ -43,6 +44,7 @@ export const WorkspaceDrawer: React.FC<WorkspaceDrawerProps> = ({ isOpen, onClos
 
   useEffect(() => {
     if (isOpen) {
+      workspaceService.isTauri().then(setIsTauri);
       loadFiles();
       setCustomUrl(workspaceService.getApiUrl());
       const unsubscribe = workspaceService.subscribe(loadFiles);
@@ -90,17 +92,8 @@ export const WorkspaceDrawer: React.FC<WorkspaceDrawerProps> = ({ isOpen, onClos
   const handleDownload = async (e: React.MouseEvent, fileMeta: StoredFile) => {
     e.stopPropagation();
     try {
-        // Fetch content before download
-        const file = await workspaceService.getFile(fileMeta.id);
-        const blob = new Blob([file.content], { type: file.mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        // Use exportFile from workspaceService to handle both Web and Desktop Save-As Dialog
+        await workspaceService.exportFile(fileMeta.id);
     } catch(e: any) {
         alert("Failed to download: " + e.message);
     }
@@ -133,29 +126,31 @@ export const WorkspaceDrawer: React.FC<WorkspaceDrawerProps> = ({ isOpen, onClos
         {/* Header */}
         <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-white shrink-0 h-14">
           <div className="flex items-center gap-3">
-            <div className={`p-1.5 rounded-lg ${error ? 'bg-red-50 text-red-500' : 'bg-primary-50 text-primary-600'}`}>
+            <div className={`p-1.5 rounded-lg ${error && !isTauri ? 'bg-red-50 text-red-500' : 'bg-primary-50 text-primary-600'}`}>
               <HardDrive className="w-4 h-4" />
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide">Workspace</h2>
               <div className="flex items-center gap-2">
-                 <span className="text-[10px] text-slate-500 font-medium">Persistent Storage</span>
-                 {error && <span className="text-[9px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-bold">OFFLINE</span>}
+                 <span className="text-[10px] text-slate-500 font-medium">{isTauri ? 'Local Storage (EXE)' : 'Remote Storage (Web)'}</span>
+                 {error && !isTauri && <span className="text-[9px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-bold">OFFLINE</span>}
               </div>
             </div>
           </div>
           <div className="flex gap-1">
-             <button onClick={() => setShowConfig(!showConfig)} className={`p-1.5 hover:bg-slate-100 rounded-md transition-colors ${showConfig ? 'text-primary-600 bg-primary-50' : 'text-slate-400 hover:text-slate-600'}`} title="Connection Settings">
-              <Settings className="w-4 h-4" />
-            </button>
+             {!isTauri && (
+               <button onClick={() => setShowConfig(!showConfig)} className={`p-1.5 hover:bg-slate-100 rounded-md transition-colors ${showConfig ? 'text-primary-600 bg-primary-50' : 'text-slate-400 hover:text-slate-600'}`} title="Connection Settings">
+                <Settings className="w-4 h-4" />
+              </button>
+             )}
             <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-md text-slate-400 hover:text-slate-600 transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* Configuration Panel (To resolve client-side errors) */}
-        {showConfig && (
+        {/* Configuration Panel (Only for Web Mode) */}
+        {!isTauri && showConfig && (
            <div className="bg-slate-50 p-4 border-b border-slate-200 animate-in slide-in-from-top duration-200">
               <label className="block text-[10px] font-bold text-slate-500 uppercase mb-2">Workspace Server URL</label>
               <div className="flex gap-2">
@@ -197,7 +192,7 @@ export const WorkspaceDrawer: React.FC<WorkspaceDrawerProps> = ({ isOpen, onClos
         </div>
 
         {/* Error State */}
-        {error && (
+        {error && !isTauri && (
             <div className="p-4 bg-red-50 border-b border-red-100 flex items-start gap-3">
                <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
                <div className="flex-1">
@@ -243,7 +238,7 @@ export const WorkspaceDrawer: React.FC<WorkspaceDrawerProps> = ({ isOpen, onClos
                     <button 
                         onClick={(e) => handleDownload(e, file)}
                         className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-600 rounded"
-                        title="Download"
+                        title="Download / Save As"
                     >
                         <Download className="w-3.5 h-3.5" />
                     </button>

@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { 
-  Sparkles, FileText, Settings2, Code, Database, AlignLeft, HardDrive, Terminal, DownloadCloud, Home, Type
+  Sparkles, FileText, Settings2, Code, Database, AlignLeft, HardDrive, Terminal, DownloadCloud, Home, Type, Space, MoveVertical, PenTool
 } from 'lucide-react';
 import { StoredFile } from './types';
 import { WorkspaceDrawer } from './components/WorkspaceDrawer';
@@ -12,10 +12,13 @@ import { ResourcesModule } from './modules/ResourcesModule';
 import { DatabaseModule } from './modules/DatabaseModule';
 import { FormatterModule } from './modules/FormatterModule';
 import { CharCheckModule } from './modules/CharCheckModule';
+import { WhitespaceModule } from './modules/WhitespaceModule';
+import { LineSpacingModule } from './modules/LineSpacingModule';
+import { PunctuationModule } from './modules/PunctuationModule';
 import { HomeDashboard } from './components/HomeDashboard';
 import { workspaceService } from './services/workspaceService';
 
-type AppModule = 'home' | 'resources' | 'predictions' | 'database' | 'formatter' | 'charcheck';
+type AppModule = 'home' | 'resources' | 'predictions' | 'database' | 'formatter' | 'charcheck' | 'whitespace' | 'linespacing' | 'punctuation';
 
 interface LogEntry {
   timestamp: string;
@@ -95,6 +98,9 @@ export default function App() {
   const databaseRef = useRef<any>(null);
   const formatterRef = useRef<any>(null);
   const charCheckRef = useRef<any>(null);
+  const whitespaceRef = useRef<any>(null);
+  const lineSpacingRef = useRef<any>(null);
+  const punctuationRef = useRef<any>(null);
 
   const addLog = useCallback((module: string, message: string) => {
     setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), module, message }]);
@@ -116,14 +122,20 @@ export default function App() {
     else if (activeModule === 'resources' && file.module === 'resources') targetRef = resourcesRef;
     else if (activeModule === 'database' && file.module === 'database') targetRef = databaseRef;
     else if (activeModule === 'formatter' && file.module === 'formatter') targetRef = formatterRef;
-    else if (activeModule === 'charcheck') targetRef = charCheckRef; // Files saved by formatter usually compatible
+    else if (activeModule === 'charcheck') targetRef = charCheckRef;
+    else if (activeModule === 'whitespace') targetRef = whitespaceRef; 
+    else if (activeModule === 'linespacing') targetRef = lineSpacingRef;
+    else if (activeModule === 'punctuation') targetRef = punctuationRef;
     
     // Loose compatibility for DB files between modules
-    if (!targetRef && (activeModule === 'database' || activeModule === 'formatter' || activeModule === 'charcheck') && 
-       (file.module === 'database' || file.module === 'formatter' || file.module === 'charcheck')) {
+    const dbModules = ['database', 'formatter', 'charcheck', 'whitespace', 'linespacing', 'punctuation'];
+    if (!targetRef && dbModules.includes(activeModule) && dbModules.includes(file.module)) {
           if (activeModule === 'database') targetRef = databaseRef;
           if (activeModule === 'formatter') targetRef = formatterRef;
           if (activeModule === 'charcheck') targetRef = charCheckRef;
+          if (activeModule === 'whitespace') targetRef = whitespaceRef;
+          if (activeModule === 'linespacing') targetRef = lineSpacingRef;
+          if (activeModule === 'punctuation') targetRef = punctuationRef;
     }
 
     if (!targetRef) {
@@ -141,7 +153,7 @@ export default function App() {
   const NavItem = ({ id, label, icon }: any) => (
     <button 
       onClick={() => setActiveModule(id)}
-      className={`px-3 py-1.5 rounded-md text-[11px] font-bold transition-all flex items-center gap-1.5 border ${activeModule === id ? 'text-white bg-slate-800 border-slate-700 shadow-sm' : 'text-slate-500 bg-white border-transparent hover:bg-slate-50'}`}
+      className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 border ${activeModule === id ? 'text-white bg-slate-800 border-slate-700 shadow-sm' : 'text-slate-500 bg-white border-transparent hover:bg-slate-50'}`}
     >
       {icon} <span className="hidden lg:inline">{label}</span>
       <span className="lg:hidden">{label.split(' ')[0]}</span>
@@ -150,31 +162,33 @@ export default function App() {
 
   return (
     <div className="h-screen bg-slate-50 text-slate-900 flex flex-col font-sans overflow-hidden">
-      <header className="bg-white border-b border-slate-200 px-4 h-12 flex items-center justify-between shrink-0 z-50 shadow-sm">
+      <header className="bg-white border-b border-slate-200 px-4 h-14 flex items-center justify-between shrink-0 z-50 shadow-sm">
         <div className="flex items-center gap-2.5 cursor-pointer group" onClick={() => setActiveModule('home')}>
-          <div className="bg-primary-600 p-1.5 rounded-md shadow-sm group-hover:bg-primary-700 transition-colors"><Sparkles className="w-3.5 h-3.5 text-white" /></div>
-          <div className="flex flex-col justify-center"><h1 className="text-xs font-bold uppercase leading-none text-slate-800 mb-0.5">AI Translation</h1><span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest leading-none">Localizer Suite</span></div>
+          <div className="bg-primary-600 p-2 rounded-md shadow-sm group-hover:bg-primary-700 transition-colors"><Sparkles className="w-4 h-4 text-white" /></div>
+          <div className="flex flex-col justify-center"><h1 className="text-sm font-bold uppercase leading-none text-slate-800 mb-0.5">AI Translation</h1><span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-none">Suite</span></div>
         </div>
         
         {/* Navigation Bar - Compact Sleek */}
         <div className="hidden md:flex items-center gap-1 p-1 bg-slate-100/50 rounded-lg border border-slate-200/60 backdrop-blur-sm">
            <NavItem id="home" label="Home" icon={<Home className="w-3.5 h-3.5"/>} />
-           <div className="w-px h-3 bg-slate-300 mx-1"></div>
-           {/* Order: Resources -> Predictions(Text) -> Database -> Formatter(Tab) -> CharCheck */}
+           <div className="w-px h-4 bg-slate-300 mx-1"></div>
            <NavItem id="resources" label="Resources" icon={<Code className="w-3.5 h-3.5"/>} />
            <NavItem id="predictions" label="Text Translation" icon={<FileText className="w-3.5 h-3.5"/>} />
            <NavItem id="database" label="Database" icon={<Database className="w-3.5 h-3.5"/>} />
            <NavItem id="formatter" label="Tab Formatting" icon={<AlignLeft className="w-3.5 h-3.5"/>} />
+           <NavItem id="whitespace" label="Space Cleaner" icon={<Space className="w-3.5 h-3.5"/>} />
+           <NavItem id="linespacing" label="Line Spacing" icon={<MoveVertical className="w-3.5 h-3.5"/>} />
+           <NavItem id="punctuation" label="Punctuation" icon={<PenTool className="w-3.5 h-3.5"/>} />
            <NavItem id="charcheck" label="Char Check" icon={<Type className="w-3.5 h-3.5"/>} />
         </div>
 
         <div className="flex items-center gap-1.5">
            {activeModule !== 'home' && (
-             <button onClick={() => setIsWorkspaceOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-slate-100 rounded-md text-slate-500 font-bold text-[10px] uppercase border border-transparent hover:border-slate-200 transition-all mr-1">
+             <button onClick={() => setIsWorkspaceOpen(true)} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-slate-100 rounded-md text-slate-500 font-bold text-xs uppercase border border-transparent hover:border-slate-200 transition-all mr-1">
                <HardDrive className="w-3.5 h-3.5 text-primary-600" /> Workspace
              </button>
            )}
-           <button onClick={() => setIsSettingsOpen(true)} className="p-1.5 hover:bg-slate-100 rounded-md text-slate-400 hover:text-slate-600 transition-colors"><Settings2 className="w-4 h-4" /></button>
+           <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-slate-100 rounded-md text-slate-400 hover:text-slate-600 transition-colors"><Settings2 className="w-4 h-4" /></button>
         </div>
       </header>
 
@@ -222,6 +236,18 @@ export default function App() {
 
       <div className={`flex-1 overflow-hidden flex flex-col ${activeModule === 'formatter' ? 'flex' : 'hidden'}`}>
         <FormatterModule ref={formatterRef} addLog={addLog} notify={notify} />
+      </div>
+
+      <div className={`flex-1 overflow-hidden flex flex-col ${activeModule === 'whitespace' ? 'flex' : 'hidden'}`}>
+        <WhitespaceModule ref={whitespaceRef} addLog={addLog} notify={notify} />
+      </div>
+
+      <div className={`flex-1 overflow-hidden flex flex-col ${activeModule === 'linespacing' ? 'flex' : 'hidden'}`}>
+        <LineSpacingModule ref={lineSpacingRef} addLog={addLog} notify={notify} />
+      </div>
+
+      <div className={`flex-1 overflow-hidden flex flex-col ${activeModule === 'punctuation' ? 'flex' : 'hidden'}`}>
+        <PunctuationModule ref={punctuationRef} addLog={addLog} notify={notify} />
       </div>
 
       <div className={`flex-1 overflow-hidden flex flex-col ${activeModule === 'charcheck' ? 'flex' : 'hidden'}`}>
